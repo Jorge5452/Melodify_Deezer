@@ -1,0 +1,20 @@
+Que vamos a cambiar:
+- Refactor del manejo del vault_cache.
+- Optimización de la descarga asíncrona.
+- Mejoras en la integración con Telegram.
+
+Mejora de vida:
+- Mejorar la experiencia del usuario en comandos.
+- Ajustar el logging para mayor claridad.
+- Implementar seguridad en el manejo de tokens y credenciales.
+
+General:
+- Revisión del flujo de descarga y verificación de archivos.
+- Optimización y mantenibilidad del código.
+- Actualización de dependencias y librerías.
+
+Bugs:
+- Corregir detección de archivos nuevos en descargas.
+- Mejor manejo de excepciones en la función de descarga.
+
+

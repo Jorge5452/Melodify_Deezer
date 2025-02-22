@@ -1,0 +1,13 @@
+# Ignorar archivos de caché de Python
+__pycache__/
+*.pyc
+
+# Ignorar descargados y archivos generados
+descargas/
+vault_data.json
+tracks_vault.json
+deluxe/
+
+# Archivos sensibles
+*.env
+config.py
