@@ -11,6 +11,8 @@ from telegram.ext import (
 )
 from deezer import Deezer
 from deemix.settings import load, save
+# Importar aiohttp para el servidor web simple
+from aiohttp import web
 
 # Cargar variables de entorno desde .env
 load_dotenv()
@@ -19,6 +21,8 @@ load_dotenv()
 BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 DEEZER_AR = os.environ.get("DEEZER_AR")
 VAULT_CHATID = os.environ.get("VAULT_CHATID")
+# Obtener el puerto de Render (o usar 8080 como predeterminado)
+PORT = int(os.environ.get("PORT", 8080))
 
 from downloader import LogListener
 from bot import start, handle_message, configuracion, config_callback, process_search_callback
@@ -33,6 +37,16 @@ DOWNLOAD_PATH = "./descargas"
 
 logging.getLogger("telegram").setLevel(logging.WARNING)
 logging.getLogger("deemix").setLevel(logging.INFO)
+
+# Crear la aplicación web
+async def create_web_app():
+    app = web.Application()
+    app.router.add_get('/', health_check)
+    return app
+
+# Endpoint simple para health checks
+async def health_check(request):
+    return web.Response(text="¡Melodify Deluxe está funcionando correctamente!")
 
 async def error_handler(update, context):
     """Maneja excepciones que ocurren en los handlers."""
@@ -83,9 +97,21 @@ async def main():
         # Registrar handler de errores
         app.add_error_handler(error_handler)
         
+        # Iniciar el bot de Telegram
         await app.initialize()
         await app.start()
         await app.updater.start_polling()
+        
+        # Iniciar el servidor web para mantener vivo el servicio en Render
+        web_app = await create_web_app()
+        runner = web.AppRunner(web_app)
+        await runner.setup()
+        site = web.TCPSite(runner, '0.0.0.0', PORT)
+        await site.start()
+        
+        logging.info(f"Servidor web iniciado en http://0.0.0.0:{PORT}")
+        
+        # Mantener la aplicación en ejecución
         await asyncio.Event().wait()
         
     except Exception as e:
