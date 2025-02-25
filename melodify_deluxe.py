@@ -14,7 +14,7 @@ from config import TELEGRAM_TOKEN, DEEZER_AR, VAULT_CHATID
 
 
 from downloader import LogListener
-from bot import start, handle_message, configuracion, config_callback
+from bot import start, handle_message, configuracion, config_callback, process_search_callback
 
 # Configuración del logging con formato claro
 logging.basicConfig(
@@ -52,13 +52,17 @@ async def main():
         
         app = ApplicationBuilder().token(BOT_TOKEN).build()
         
-        # Guardar settings en el contexto del bot
+        # Guardar settings y componentes en el contexto del bot
         app.bot_data['settings'] = settings
+        app.bot_data['dz'] = dz
+        app.bot_data['listener'] = listener
+        app.bot_data['vault_chat_id'] = VAULT_CHATID
         
         # Registrar handlers
         app.add_handler(CommandHandler("start", start))
         app.add_handler(CommandHandler("config", configuracion))
-        app.add_handler(CallbackQueryHandler(config_callback))
+        app.add_handler(CallbackQueryHandler(config_callback, pattern="^[0-9]+$"))
+        app.add_handler(CallbackQueryHandler(process_search_callback, pattern="^(search|artist|artist_menu|download|back)"))
         app.add_handler(MessageHandler(
             filters.TEXT,
             lambda u, c: handle_message(u, c, dz, settings, VAULT_CHATID, listener)
