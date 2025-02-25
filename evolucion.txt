@@ -20,12 +20,12 @@ Bugs:
 
 
 
+- El json esta haciendo doble guardado (Si se mandaba una playlist, se guarda el registro como playlist y luego las canciones en individual )
 
 
 
 
-
-
+ - Modificacion de la libreria
 def generatePlaylistItem(dz, link_id, bitrate, playlistAPI=None, playlistTracksAPI=None):
     if not playlistAPI:
         if not str(link_id).isdecimal(): raise InvalidID(f"https://deezer.com/playlist/{link_id}")
