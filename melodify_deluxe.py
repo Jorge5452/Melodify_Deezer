@@ -1,6 +1,7 @@
 import os
 import asyncio
 import logging
+from dotenv import load_dotenv
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -10,8 +11,14 @@ from telegram.ext import (
 )
 from deezer import Deezer
 from deemix.settings import load, save
-from config import TELEGRAM_TOKEN, DEEZER_AR, VAULT_CHATID
 
+# Cargar variables de entorno desde .env
+load_dotenv()
+
+# Obtener variables de entorno
+BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+DEEZER_AR = os.environ.get("DEEZER_AR")
+VAULT_CHATID = os.environ.get("VAULT_CHATID")
 
 from downloader import LogListener
 from bot import start, handle_message, configuracion, config_callback, process_search_callback
@@ -22,7 +29,6 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
-BOT_TOKEN = TELEGRAM_TOKEN
 DOWNLOAD_PATH = "./descargas"
 
 logging.getLogger("telegram").setLevel(logging.WARNING)
@@ -36,6 +42,12 @@ async def error_handler(update, context):
 
 async def main():
     try:
+        # Verificar que las variables de entorno estén configuradas
+        if not BOT_TOKEN:
+            raise Exception("La variable de entorno TELEGRAM_TOKEN no está configurada en el archivo .env")
+        if not DEEZER_AR:
+            raise Exception("La variable de entorno DEEZER_AR no está configurada en el archivo .env")
+        
         os.makedirs(DOWNLOAD_PATH, exist_ok=True)
         
         # Configurar settings
