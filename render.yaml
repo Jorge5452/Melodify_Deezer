@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: melodify-deluxe
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python melodify_deluxe.py
+    envVars:
+      - key: PORT
+        fromService:
+          type: web
+          name: melodify-deluxe
+          envVarKey: PORT 

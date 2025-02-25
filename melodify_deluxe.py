@@ -42,11 +42,16 @@ logging.getLogger("deemix").setLevel(logging.INFO)
 async def create_web_app():
     app = web.Application()
     app.router.add_get('/', health_check)
+    app.router.add_get('/ping', ping_handler)
     return app
 
 # Endpoint simple para health checks
 async def health_check(request):
-    return web.Response(text="¡Melodify Deluxe está funcionando correctamente!")
+    return web.Response(text="¡Melodify Deluxe está funcionando correctamente!", status=200)
+
+# Endpoint adicional para pings periódicos
+async def ping_handler(request):
+    return web.Response(text="pong", status=200)
 
 async def error_handler(update, context):
     """Maneja excepciones que ocurren en los handlers."""
@@ -110,6 +115,8 @@ async def main():
         await site.start()
         
         logging.info(f"Servidor web iniciado en http://0.0.0.0:{PORT}")
+        logging.info(f"Health check disponible en http://0.0.0.0:{PORT}/")
+        logging.info(f"Endpoint de ping disponible en http://0.0.0.0:{PORT}/ping")
         
         # Mantener la aplicación en ejecución
         await asyncio.Event().wait()
