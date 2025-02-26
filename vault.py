@@ -51,33 +51,34 @@ def load_vault() -> Dict[str, Any]:
     """
     data = {}
     
+    # Intentar cargar vault_data.json
     if os.path.exists(VAULT_JSON):
         try:
             with open(VAULT_JSON, 'r') as f:
                 data = json.load(f)
             
-            # Validar datos
+            # Validar datos del vault.json
             if not validate_vault_data(data):
-                logging.warning("Estructura de datos del vault inválida, usando vault vacío")
-                return {}
+                logging.warning("Estructura de datos del vault.json inválida, intentando recuperar desde backup")
+                # Forzamos la recuperación desde backup
+                raise ValueError("Vault JSON inválido")
             
             return data
-        except json.JSONDecodeError:
-            logging.error("Error decodificando JSON del vault")
-            # Intentar recuperar desde backup
-            if os.path.exists(VAULT_BACKUP):
-                try:
-                    with open(VAULT_BACKUP, 'r') as f:
-                        data = json.load(f)
-                    if validate_vault_data(data):
-                        logging.info("Vault recuperado desde backup")
-                        return data
-                except:
-                    logging.error("No se pudo recuperar desde backup")
-            return {}
         except Exception as e:
-            logging.error(f"Error cargando vault: {str(e)}")
-            return {}
+            logging.error(f"Error al cargar vault.json: {str(e)}")
+    
+    # Si vault_data.json no existe o falla, intentar usar el backup
+    if os.path.exists(VAULT_BACKUP):
+        try:
+            with open(VAULT_BACKUP, 'r') as f:
+                data = json.load(f)
+            if validate_vault_data(data):
+                logging.info("Vault recuperado desde backup")
+                return data
+            else:
+                logging.error("Estructura de datos del backup inválida")
+        except Exception as e:
+            logging.error(f"No se pudo recuperar desde backup: {str(e)}")
     
     return data
 
