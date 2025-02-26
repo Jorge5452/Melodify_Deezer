@@ -457,7 +457,9 @@ async def extract_tracks_info(collection_info, dz):
     track_titles = []
     
     try:
-        tracks = collection_info.get('tracks', {}).get('data', [])
+        # Extraer la página inicial de pistas.
+        tracks_data = collection_info.get('tracks', {})
+        tracks = tracks_data.get('data', [])
         for track in tracks:
             track_id = track.get('id')
             if track_id:
@@ -466,6 +468,36 @@ async def extract_tracks_info(collection_info, dz):
                 artist_name = track.get('artist', {}).get('name', 'Desconocido')
                 track_title = track.get('title', 'Sin título')
                 track_titles.append(f"{artist_name} - {track_title}")
+        
+        # Obtener la cantidad total de pistas en el álbum (si está disponible)
+        total_album_tracks = collection_info.get('nb_tracks')
+        album_id = collection_info.get('id')
+
+        # Determinar la URL de la siguiente página. Si la API no la entrega pero faltan pistas, la construimos manualmente.
+        next_url = tracks_data.get('next')
+        if total_album_tracks and total_album_tracks > len(track_urls) and not next_url:
+            next_url = f"https://api.deezer.com/album/{album_id}/tracks?index={len(track_urls)}"
+
+        # Mientras exista una URL "next" y aún no se hayan obtenido todas las pistas, seguir extrayéndolas.
+        while next_url and (not total_album_tracks or len(track_urls) < total_album_tracks):
+            response = requests.get(next_url)
+            if response.status_code == 200:
+                tracks_data = response.json()
+                tracks = tracks_data.get('data', [])
+                for track in tracks:
+                    track_id = track.get('id')
+                    if track_id:
+                        track_urls.append(f"https://www.deezer.com/track/{track_id}")
+                        track_ids.append(str(track_id))
+                        artist_name = track.get('artist', {}).get('name', 'Desconocido')
+                        track_title = track.get('title', 'Sin título')
+                        track_titles.append(f"{artist_name} - {track_title}")
+                next_url = tracks_data.get('next')
+                # Si la API no proporciona "next" pero aún faltan pistas, generar la URL manualmente.
+                if not next_url and total_album_tracks and len(track_urls) < total_album_tracks:
+                    next_url = f"https://api.deezer.com/album/{album_id}/tracks?index={len(track_urls)}"
+            else:
+                break
     except Exception as e:
         logging.warning(f"No se pudo obtener lista de tracks: {str(e)}")
         
