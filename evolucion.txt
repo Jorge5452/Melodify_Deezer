@@ -1,28 +1,36 @@
 Que vamos a cambiar:
-- Refactor del manejo del vault_cache.
+- Cambiar if a funciones (Modularizacion de codigo)
+- SOPORTE A ATENDER A MULTIUSUARIOS
 - Optimización de la descarga asíncrona.
 - Mejoras en la integración con Telegram.
+- Puede detectar a los usuarios
+
+*************************************************************
+- Apartado de donacion:
+    *Mas descargas
+    *Prioridad
+
+    5 usuarios normales en Fila 1 - 2 - 3 - 4 - 5
+    1 usuario que dono  en fila 1* - 1 - 2 - 3 - 4 - 5
+ ************************************************************
+
+- La publicidad 
+- COMANDOS DE ADMINISTRADOR
+
 
 Mejora de vida:
 - Mejorar la experiencia del usuario en comandos.
 - Ajustar el logging para mayor claridad.
-- Implementar seguridad en el manejo de tokens y credenciales.
+- Opcion de cambiar a idioma ingles
 
 General:
 - Revisión del flujo de descarga y verificación de archivos.
 - Optimización y mantenibilidad del código.
-- Actualización de dependencias y librerías.
 
 Bugs:
-- Corregir detección de archivos nuevos en descargas.
-- Mejor manejo de excepciones en la función de descarga.
-
-
-
-
 - El json esta haciendo doble guardado (Si se mandaba una playlist, se guarda el registro como playlist y luego las canciones en individual )
-
-
+- Cuando se envía una playlist actualizada que ya existe en el JSON (con una versión anterior), el sistema únicamente procesa o devuelve las canciones de la versión antigua en lugar de la lista actualizada.
+- Cuando se envia una playlist que ya existe en el JSON esta no envia la caratula del album/playlist ni su informacion.
 
 
  - Modificacion de la libreria

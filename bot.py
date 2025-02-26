@@ -314,186 +314,24 @@ async def handle_message(
     listener
 ):
     """Maneja los mensajes entrantes, procesando URLs de Deezer o búsquedas."""
+    print(" - - - Dentro de handle message - - -")
     try:
         url = update.message.text.strip()
         
         # Validar URL
         if validate_deezer_url(url):
-            # Verificar cache en vault
+            # Obtener tipo de contenido y su ID
             content_type = get_content_type(url)
             content_id = extract_id_from_url(url)
             
-            if content_type == "track":
-                bitrate = settings.get("maxBitrate", 3)
-                cache_key = f"{content_id}_{bitrate}"
-                cached_data = get_from_vault(cache_key)
-                
-                if cached_data:
-                    await update.message.reply_text("🎵 Encontrado en caché")
-                    await update.message.reply_audio(audio=cached_data)
-                    return
-                
-                # Notificar inicio de descarga
-                status_message = await update.message.reply_text("⏳ Descargando pista...")
-                
-                # Descargar track
-                try:
-                    file_path = await download_track(url, dz, settings, listener)
-                    
-                    # Actualizar estado
-                    await status_message.edit_text("✅ Descarga completada. Enviando...")
-                    
-                    # Enviar y guardar en vault
-                    file_id = await send_and_save_audio(
-                        context, 
-                        update.message.chat_id, 
-                        file_path, 
-                        f"Track: {content_id}", 
-                        vault_chat_id, 
-                        cache_key,
-                        dz=dz,
-                        track_id=content_id
-                    )
-                    
-                    # Guardar en vault
-                    add_to_vault(cache_key, file_id)
-                    
-                    # Eliminar archivo temporal
-                    if os.path.exists(file_path):
-                        os.remove(file_path)
-                    
-                    # Actualizar mensaje de estado
-                    await status_message.edit_text("✅ Listo")
-                    
-                except Exception as e:
-                    logging.error(f"Error al descargar: {str(e)}")
-                    await status_message.edit_text(f"❌ Error: {str(e)}")
+            # Importar y seleccionar la estrategia adecuada
+            from content_processors import strategy_map
+            processor = strategy_map.get(content_type)
             
-            elif content_type in ["album", "playlist"]:
-                cache_key = f"{content_type}_{content_id}"
-                cached_data = get_from_vault(cache_key)
-                
-                if cached_data and isinstance(cached_data, list):
-                    await update.message.reply_text(f"📂 {content_type.title()} encontrado en caché")
-                    for file_id in cached_data:
-                        await update.message.reply_audio(audio=file_id)
-                    return
-                
-                # Notificar inicio de descarga
-                status_message = await update.message.reply_text(f"⏳ Obteniendo información de {content_type}...")
-                
-                try:
-                    # Obtener información del álbum/playlist
-                    collection_info = None
-                    if content_type == "album":
-                        collection_info = dz.api.get_album(content_id)
-                    else:  # playlist
-                        collection_info = dz.api.get_playlist(content_id)
-                    
-                    # Extraer metadatos y URLs de pistas
-                    track_urls = []
-                    track_ids = []
-                    track_titles = []
-                    
-                    try:
-                        tracks = collection_info.get('tracks', {}).get('data', [])
-                        for track in tracks:
-                            track_id = track.get('id')
-                            if track_id:
-                                track_urls.append(f"https://www.deezer.com/track/{track_id}")
-                                track_ids.append(str(track_id))
-                                artist_name = track.get('artist', {}).get('name', 'Desconocido')
-                                track_title = track.get('title', 'Sin título')
-                                track_titles.append(f"{artist_name} - {track_title}")
-                    except Exception as e:
-                        logging.warning(f"No se pudo obtener lista de tracks: {str(e)}")
-                        # Si falló la obtención de metadatos, intentar descargar la playlist/álbum completo
-                        return await download_complete_collection(update, context, url, content_type, content_id, 
-                                                                dz, settings, listener, vault_chat_id, cache_key, status_message)
-                    
-                    if not track_urls:
-                        await status_message.edit_text(f"❌ No se encontraron pistas en el {content_type}.")
-                        return
-                    
-                    total_tracks = len(track_urls)
-                    logging.info(f"Pistas encontradas en {content_type}: {total_tracks}")
-                    
-                    # Enviar vista previa de la colección
-                    await send_collection_preview(update, context, collection_info, content_type, total_tracks)
-                    
-                    # Actualizar mensaje de estado
-                    await status_message.edit_text(f"⏳ Procesando {total_tracks} pistas de {content_type}...")
-                    
-                    # Determinar si procesar por lotes o individualmente
-                    if total_tracks > BATCH_SIZE:
-                        # Procesar en lotes para playlists grandes
-                        await process_playlist_in_batches(update, context, track_urls, track_ids, track_titles, 
-                                                         dz, settings, listener, vault_chat_id, 
-                                                         status_message, cache_key, content_type)
-                    else:
-                        # Para pocas pistas, procesar individualmente
-                        file_ids = []
-                        for i, (track_url, track_id, track_title) in enumerate(zip(track_urls, track_ids, track_titles)):
-                            try:
-                                # Definir clave de caché para esta pista
-                                bitrate = settings.get("maxBitrate", 3)
-                                individual_cache_key = f"{track_id}_{bitrate}"
-                                
-                                # Verificar si esta pista específica está en caché
-                                cached_track = get_from_vault(individual_cache_key)
-                                if cached_track:
-                                    file_ids.append(cached_track)
-                                    await update.message.reply_audio(audio=cached_track)
-                                    continue
-                                
-                                # Actualizar mensaje de estado
-                                await status_message.edit_text(f"⏳ Descargando pista {i+1}/{total_tracks}: {track_title}")
-                                
-                                # Descargar pista individual
-                                file_path = await download_track(track_url, dz, settings, listener)
-                                
-                                # Enviar y guardar en vault
-                                file_id = await send_and_save_audio(
-                                    context, 
-                                    update.message.chat_id, 
-                                    file_path, 
-                                    f"{content_type.title()} pista {i+1}/{total_tracks}: {track_title}", 
-                                    vault_chat_id, 
-                                    individual_cache_key,
-                                    dz=dz,
-                                    track_id=track_id
-                                )
-                                
-                                # Guardar ID en la lista y en vault individual
-                                file_ids.append(file_id)
-                                add_to_vault(individual_cache_key, file_id)
-                                
-                                # Eliminar archivo temporal
-                                if os.path.exists(file_path):
-                                    os.remove(file_path)
-                                
-                                # Pequeña pausa entre descargas
-                                if i < total_tracks - 1:
-                                    await asyncio.sleep(1)
-                                
-                            except Exception as e:
-                                logging.error(f"Error descargando pista {i+1}: {str(e)}", exc_info=True)
-                                await update.message.reply_text(f"⚠️ Error con pista {i+1}: {track_title}")
-                        
-                        # Guardar todos los IDs en el vault como playlist/album
-                        if file_ids:
-                            add_to_vault(cache_key, file_ids)
-                            await status_message.edit_text(f"✅ {content_type.title()} enviado completamente ({len(file_ids)}/{total_tracks} pistas)")
-                        else:
-                            await status_message.edit_text(f"❌ No se pudo descargar ninguna pista del {content_type}.")
-                
-                except Exception as e:
-                    logging.error(f"Error al procesar {content_type}: {str(e)}", exc_info=True)
-                    await status_message.edit_text(f"❌ Error: {str(e)}")
-            
+            if processor:
+                await processor.process(update, context, dz, settings, vault_chat_id, listener, url, content_id)
             else:
                 await update.message.reply_text("🔗 Tipo de contenido no soportado")
-            
         else:
             # Si no es una URL, tratar como búsqueda
             await show_search_menu(update, context)
@@ -502,73 +340,195 @@ async def handle_message(
         logging.error(f"Error crítico: {str(e)}", exc_info=True)
         await update.message.reply_text("⚠️ Error procesando tu solicitud")
 
-async def download_complete_collection(update, context, url, content_type, content_id, 
-                                     dz, settings, listener, vault_chat_id, cache_key, status_message):
-    """Función de respaldo para intentar descargar una colección completa de una vez."""
+async def process_track(update, context, url, track_id, dz, settings, vault_chat_id, listener):
+    """
+    Procesa la descarga de una pista individual.
+    """
+    bitrate = settings.get("maxBitrate", 3)
+    cache_key = f"{track_id}_{bitrate}"
+    cached_data = get_from_vault(cache_key)
+    
+    if cached_data:
+        await update.message.reply_text("🎵 Encontrado en caché")
+        await update.message.reply_audio(audio=cached_data)
+        return
+    
+    # Notificar inicio de descarga
+    status_message = await update.message.reply_text("⏳ Descargando pista...")
+    
     try:
-        # Actualizar mensaje
-        await status_message.edit_text(f"⏳ Descargando {content_type} completo. Esto puede tardar...")
-        
-        # Intentar descargar como colección
-        file_paths = await download_track(url, dz, settings, listener)
-        
-        if not isinstance(file_paths, list):
-            file_paths = [file_paths]
-        
-        # Log para depuración
-        logging.info(f"Archivos descargados: {len(file_paths)}")
-        for fp in file_paths:
-            logging.info(f"Archivo: {fp}")
-        
-        if len(file_paths) == 0:
-            await status_message.edit_text(f"❌ No se pudo descargar el {content_type}.")
-            return
+        # Descargar track
+        file_path = await download_track(url, dz, settings, listener)
         
         # Actualizar estado
-        await status_message.edit_text(f"✅ Descarga completada. Enviando {len(file_paths)} pistas...")
+        await status_message.edit_text("✅ Descarga completada. Enviando...")
         
-        # Enviar cada pista y guardar IDs
-        file_ids = []
-        for i, file_path in enumerate(file_paths):
-            try:
-                if not os.path.exists(file_path):
-                    logging.error(f"Archivo no encontrado: {file_path}")
-                    continue
-                
-                # Añadir delay entre envíos
-                if i > 0:
-                    await asyncio.sleep(1)
-                
-                file_id = await send_and_save_audio(
-                    context, 
-                    update.message.chat_id, 
-                    file_path, 
-                    f"{content_type.title()} track {i+1}/{len(file_paths)}", 
-                    vault_chat_id, 
-                    f"{cache_key}_{i}",
-                    dz=dz,
-                    track_id=None  # Aquí no tenemos track_id disponible
-                )
-                file_ids.append(file_id)
-                
-                # Eliminar archivo temporal
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                
-            except Exception as e:
-                logging.error(f"Error enviando pista {i+1}: {str(e)}", exc_info=True)
-                await update.message.reply_text(f"⚠️ Error enviando pista {i+1}")
+        # Enviar y guardar en vault
+        file_id = await send_and_save_audio(
+            context, 
+            update.message.chat_id, 
+            file_path, 
+            f"Track: {track_id}", 
+            vault_chat_id, 
+            cache_key,
+            dz=dz,
+            track_id=track_id
+        )
         
-        # Guardar todos los IDs en el vault
-        if file_ids:
-            add_to_vault(cache_key, file_ids)
-            await status_message.edit_text(f"✅ {content_type.title()} enviado completamente")
-        else:
-            await status_message.edit_text(f"❌ No se pudo enviar ninguna pista del {content_type}.")
-            
+        # Guardar en vault
+        add_to_vault(cache_key, file_id)
+        
+        # Eliminar archivo temporal
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        
+        # Actualizar mensaje de estado
+        await status_message.edit_text("✅ Listo")
+        
     except Exception as e:
-        logging.error(f"Error en download_complete_collection: {str(e)}", exc_info=True)
+        logging.error(f"Error al descargar: {str(e)}")
         await status_message.edit_text(f"❌ Error: {str(e)}")
+
+async def process_collection(update, context, url, content_type, content_id, dz, settings, vault_chat_id, listener):
+    """
+    Procesa la descarga de un álbum o playlist.
+    """
+    cache_key = f"{content_type}_{content_id}"
+    # Si es una playlist se ignora el caché para forzar la actualización
+    if content_type != "playlist":
+        cached_data = get_from_vault(cache_key)
+        if cached_data and isinstance(cached_data, list):
+            await update.message.reply_text(f"📂 {content_type.title()} encontrado en caché")
+            for file_id in cached_data:
+                await update.message.reply_audio(audio=file_id)
+            return
+    
+    # Notificar inicio de descarga
+    status_message = await update.message.reply_text(f"⏳ Obteniendo información de {content_type}...")
+    
+    try:
+        # Obtener información del álbum/playlist
+        collection_info = await get_collection_info(dz, content_type, content_id)
+        
+        # Extraer metadatos y URLs de pistas
+        track_urls, track_ids, track_titles = await extract_tracks_info(collection_info, dz)
+        
+        if not track_urls:
+            await status_message.edit_text(f"❌ No se encontraron pistas en el {content_type}.")
+            return
+        
+        total_tracks = len(track_urls)
+        logging.info(f"Pistas encontradas en {content_type}: {total_tracks}")
+        
+        # Enviar vista previa de la colección
+        await send_collection_preview(update, context, collection_info, content_type, total_tracks)
+        
+        # Actualizar mensaje de estado
+        await status_message.edit_text(f"⏳ Procesando {total_tracks} pistas de {content_type}...")
+        
+        # Determinar si procesar por lotes o individualmente
+        if total_tracks > BATCH_SIZE:
+            # Procesar en lotes para playlists grandes
+            await process_playlist_in_batches(update, context, track_urls, track_ids, track_titles, 
+                                             dz, settings, listener, vault_chat_id, 
+                                             status_message, cache_key, content_type)
+        else:
+            # Para pocas pistas, procesar individualmente
+            await process_small_collection(update, context, track_urls, track_ids, track_titles,
+                                          total_tracks, dz, settings, listener, vault_chat_id,
+                                          status_message, cache_key, content_type)
+    
+    except Exception as e:
+        logging.error(f"Error al procesar {content_type}: {str(e)}", exc_info=True)
+        await status_message.edit_text(f"❌ Error: {str(e)}")
+
+# Nuevas funciones auxiliares para el procesamiento de colecciones
+async def get_collection_info(dz, content_type, content_id):
+    """Obtiene información sobre un álbum o playlist."""
+    if content_type == "album":
+        return dz.api.get_album(content_id)
+    else:  # playlist
+        return dz.api.get_playlist(content_id)
+
+async def extract_tracks_info(collection_info, dz):
+    """Extrae información de pistas de un álbum o playlist."""
+    track_urls = []
+    track_ids = []
+    track_titles = []
+    
+    try:
+        tracks = collection_info.get('tracks', {}).get('data', [])
+        for track in tracks:
+            track_id = track.get('id')
+            if track_id:
+                track_urls.append(f"https://www.deezer.com/track/{track_id}")
+                track_ids.append(str(track_id))
+                artist_name = track.get('artist', {}).get('name', 'Desconocido')
+                track_title = track.get('title', 'Sin título')
+                track_titles.append(f"{artist_name} - {track_title}")
+    except Exception as e:
+        logging.warning(f"No se pudo obtener lista de tracks: {str(e)}")
+        
+    return track_urls, track_ids, track_titles
+
+async def process_small_collection(update, context, track_urls, track_ids, track_titles,
+                                  total_tracks, dz, settings, listener, vault_chat_id,
+                                  status_message, cache_key, content_type):
+    """Procesa una colección pequeña de pistas."""
+    file_ids = []
+    for i, (track_url, track_id, track_title) in enumerate(zip(track_urls, track_ids, track_titles)):
+        try:
+            # Definir clave de caché para esta pista
+            bitrate = settings.get("maxBitrate", 3)
+            individual_cache_key = f"{track_id}_{bitrate}"
+            
+            # Verificar si esta pista específica está en caché
+            cached_track = get_from_vault(individual_cache_key)
+            if cached_track:
+                file_ids.append(cached_track)
+                await update.message.reply_audio(audio=cached_track)
+                continue
+            
+            # Actualizar mensaje de estado
+            await status_message.edit_text(f"⏳ Descargando pista {i+1}/{total_tracks}: {track_title}")
+            
+            # Descargar pista individual
+            file_path = await download_track(track_url, dz, settings, listener)
+            
+            # Enviar y guardar en vault
+            file_id = await send_and_save_audio(
+                context, 
+                update.message.chat_id, 
+                file_path, 
+                f"{content_type.title()} pista {i+1}/{total_tracks}: {track_title}", 
+                vault_chat_id, 
+                individual_cache_key,
+                dz=dz,
+                track_id=track_id
+            )
+            
+            # Guardar ID en la lista y en vault individual
+            file_ids.append(file_id)
+            add_to_vault(individual_cache_key, file_id)
+            
+            # Eliminar archivo temporal
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            
+            # Pequeña pausa entre descargas
+            if i < total_tracks - 1:
+                await asyncio.sleep(1)
+            
+        except Exception as e:
+            logging.error(f"Error descargando pista {i+1}: {str(e)}", exc_info=True)
+            await update.message.reply_text(f"⚠️ Error con pista {i+1}: {track_title}")
+    
+    # Guardar todos los IDs en el vault como playlist/album
+    if file_ids:
+        add_to_vault(cache_key, file_ids)
+        await status_message.edit_text(f"✅ {content_type.title()} enviado completamente ({len(file_ids)}/{total_tracks} pistas)")
+    else:
+        await status_message.edit_text(f"❌ No se pudo descargar ninguna pista del {content_type}.")
 
 # Función para descargar y enviar la vista previa de playlist/álbum
 async def send_collection_preview(update, context, collection_info, content_type, total_tracks):
@@ -680,83 +640,103 @@ async def process_search_callback(update, context):
     data = query.data.split(":")
     action = data[0]
     
-    if action == "search":
-        search_type = data[1]
-        search_query = data[2]
-        
-        await query.edit_message_text(f"🔍 Buscando {search_type}: {search_query}...")
-        
-        dz = context.bot_data.get('dz')
-        results = await search_content(dz, search_query, search_type)
-        
-        if not results:
-            await query.edit_message_text(f"❌ No se encontraron resultados para: {search_query}")
-            return
-        
-        # Mostrar resultados según el tipo de búsqueda
-        if search_type == "artist":
-            await show_artist_results(query, results)
-        elif search_type == "album":
-            await show_album_results(query, results)
-        elif search_type == "track":
-            await show_track_results(query, results)
+    handlers = {
+        "search": handle_search_callback,
+        "artist": handle_artist_callback,
+        "artist_menu": handle_artist_menu_callback,
+        "download": handle_download_callback,
+        "back": handle_back_callback
+    }
     
-    elif action == "artist":
-        artist_id = data[1]
-        await show_artist_info(query, context, artist_id)
+    if action in handlers:
+        await handlers[action](query, context, data)
+    else:
+        logging.warning(f"Acción desconocida: {action}")
+
+async def handle_search_callback(query, context, data):
+    """Maneja la acción de búsqueda."""
+    search_type = data[1]
+    search_query = data[2]
     
-    elif action == "artist_menu":
-        artist_id = data[1]
-        option = data[2]
+    await query.edit_message_text(f"🔍 Buscando {search_type}: {search_query}...")
+    
+    dz = context.bot_data.get('dz')
+    results = await search_content(dz, search_query, search_type)
+    
+    if not results:
+        await query.edit_message_text(f"❌ No se encontraron resultados para: {search_query}")
+        return
+    
+    # Mostrar resultados según el tipo de búsqueda
+    if search_type == "artist":
+        await show_artist_results(query, results)
+    elif search_type == "album":
+        await show_album_results(query, results)
+    elif search_type == "track":
+        await show_track_results(query, results)
+
+async def handle_artist_callback(query, context, data):
+    """Maneja la acción de selección de artista."""
+    artist_id = data[1]
+    await show_artist_info(query, context, artist_id)
+
+async def handle_artist_menu_callback(query, context, data):
+    """Maneja las opciones del menú de artista."""
+    artist_id = data[1]
+    option = data[2]
+    
+    if option == "albums":
+        await show_artist_albums(query, context, artist_id)
+    elif option == "top":
+        await show_artist_top_tracks(query, context, artist_id)
+
+async def handle_download_callback(query, context, data):
+    """Maneja la acción de descarga desde los resultados de búsqueda."""
+    content_type = data[1]
+    content_id = data[2]
+    
+    if content_type == "album":
+        await start_album_download(query, context, content_id)
+    elif content_type == "track":
+        await start_track_download(query, context, content_id)
+
+async def handle_back_callback(query, context, data):
+    """Maneja la acción de volver atrás en la navegación."""
+    if len(data) > 1:
+        back_type = data[1]
         
-        if option == "albums":
-            await show_artist_albums(query, context, artist_id)
-        elif option == "top":
-            await show_artist_top_tracks(query, context, artist_id)
+        if back_type == "search":
+            await handle_back_to_search(query, data)
+        elif back_type == "artist" and len(data) > 2:
+            # Volver a la info del artista
+            artist_id = data[2]
+            await show_artist_info(query, context, artist_id)
+
+async def handle_back_to_search(query, data):
+    """Maneja la acción de volver al menú de búsqueda."""
+    search_query = data[2] if len(data) > 2 else "Búsqueda"
+    keyboard = [
+        [InlineKeyboardButton("🎤 Buscar por Artista", callback_data=f"search:artist:{search_query}")],
+        [InlineKeyboardButton("💿 Buscar por Álbum", callback_data=f"search:album:{search_query}")],
+        [InlineKeyboardButton("🎵 Buscar por Canción", callback_data=f"search:track:{search_query}")]
+    ]
     
-    elif action == "download":
-        content_type = data[1]
-        content_id = data[2]
-        
-        if content_type == "album":
-            await start_album_download(query, context, content_id)
-        elif content_type == "track":
-            await start_track_download(query, context, content_id)
+    reply_markup = InlineKeyboardMarkup(keyboard)
     
-    elif action == "back":
-        if len(data) > 1:
-            back_type = data[1]
-            
-            if back_type == "search":
-                # Volver al menú de búsqueda
-                search_query = data[2] if len(data) > 2 else "Búsqueda"
-                keyboard = [
-                    [InlineKeyboardButton("🎤 Buscar por Artista", callback_data=f"search:artist:{search_query}")],
-                    [InlineKeyboardButton("💿 Buscar por Álbum", callback_data=f"search:album:{search_query}")],
-                    [InlineKeyboardButton("🎵 Buscar por Canción", callback_data=f"search:track:{search_query}")]
-                ]
-                
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                # Intentar editar, si falla, enviar nuevo mensaje
-                try:
-                    await query.edit_message_text(
-                        f"🔍 *Búsqueda: {search_query}*\n\nSelecciona una opción:",
-                        reply_markup=reply_markup,
-                        parse_mode="Markdown"
-                    )
-                except Exception as e:
-                    logging.warning(f"No se pudo editar el mensaje al volver: {e}")
-                    await query.message.reply_text(
-                        f"🔍 *Búsqueda: {search_query}*\n\nSelecciona una opción:",
-                        reply_markup=reply_markup,
-                        parse_mode="Markdown"
-                    )
-                    
-            elif back_type == "artist" and len(data) > 2:
-                # Volver a la info del artista
-                artist_id = data[2]
-                await show_artist_info(query, context, artist_id)
+    # Intentar editar, si falla, enviar nuevo mensaje
+    try:
+        await query.edit_message_text(
+            f"🔍 *Búsqueda: {search_query}*\n\nSelecciona una opción:",
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logging.warning(f"No se pudo editar el mensaje al volver: {e}")
+        await query.message.reply_text(
+            f"🔍 *Búsqueda: {search_query}*\n\nSelecciona una opción:",
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
 
 async def show_artist_results(query, results):
     """Muestra los resultados de búsqueda de artistas."""
