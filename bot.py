@@ -394,14 +394,16 @@ async def process_collection(update, context, url, content_type, content_id, dz,
     Procesa la descarga de un álbum o playlist.
     """
     cache_key = f"{content_type}_{content_id}"
-    # Si es una playlist se ignora el caché para forzar la actualización
-    if content_type != "playlist":
-        cached_data = get_from_vault(cache_key)
-        if cached_data and isinstance(cached_data, list):
-            await update.message.reply_text(f"📂 {content_type.title()} encontrado en caché")
-            for file_id in cached_data:
-                await update.message.reply_audio(audio=file_id)
-            return
+    # Verificar si existe el álbum/playlist completo en caché, pero solo usarlo 
+    # completamente para tipos de contenido que no sean ni playlist ni álbum
+    cached_data = get_from_vault(cache_key)
+    
+    # Si no es ni playlist ni álbum y existe en caché, enviar directamente
+    if content_type != "playlist" and content_type != "album" and cached_data and isinstance(cached_data, list):
+        await update.message.reply_text(f"📂 {content_type.title()} encontrado en caché")
+        for file_id in cached_data:
+            await update.message.reply_audio(audio=file_id)
+        return
     
     # Notificar inicio de descarga
     status_message = await update.message.reply_text(f"⏳ Obteniendo información de {content_type}...")

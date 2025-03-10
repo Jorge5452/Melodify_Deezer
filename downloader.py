@@ -6,6 +6,8 @@ from typing import Union, List
 from deezer import Deezer
 from deemix import generateDownloadObject
 from deemix.downloader import Downloader
+# from user_session import UserSession
+
 
 DOWNLOAD_PATH = "./descargas"
 

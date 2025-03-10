@@ -7,6 +7,7 @@ descargas/
 vault_data.json
 tracks_vault.json
 deluxe/
+linux/
 
 # Archivos sensibles
 *.env
