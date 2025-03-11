@@ -1,5 +1,5 @@
 Que vamos a cambiar:
-- SOPORTE A ATENDER A MULTIUSUARIOS
+- SOPORTE A ATENDER A MULTIUSUARIOS - falta probar
 - Optimización de la descarga asíncrona.
 - Mejoras en la integración con Telegram.
 - Puede detectar a los usuarios
@@ -27,5 +27,20 @@ General:
 - Optimización y mantenibilidad del código.
 
 Bugs:
+    - Error: 'API' object has no attribute 'get_artist_top_tracks'
+        2025-03-11 00:01:46,370 - ERROR - Error obteniendo top tracks: 'API' object has no attribute 'get_artist_top_tracks'
+        Traceback (most recent call last):
+        File "...\Melodify_Deezer\bot.py", line 1006, in show_artist_top_tracks
+            top_tracks = dz.api.get_artist_top_tracks(artist_id, limit=10)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        AttributeError: 'API' object has no attribute 'get_artist_top_tracks'
 
+Notas
+    10/03/2025 - 23:43
+        - Se implemento soporte multi usuario, pero no se ha probado
+        - Se elimino el uso de strategy por ser una depedencia circular y solo tener un uso en el codigo.
+        - Se mejoro el uso del usuario simulado, creando clases glogales ya que tenia implementaciones iguales en:
+             start_track_download y start_album_download.
+        - Se mejoro el readme para incluir los comandos para crear el entorno virtual y su uso en linux y windows.
+        - Se mejoro el logging de inicio del bot.
 

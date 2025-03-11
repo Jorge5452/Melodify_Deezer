@@ -7,10 +7,54 @@ from typing import List, Union
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, CallbackContext
 from vault import load_vault, save_vault, add_to_vault, get_from_vault
-from downloader import download_track
+from downloader import download_track, enqueue_download
 from deemix.settings import load, save
+from user_session import UserSession
 import requests
 from io import BytesIO
+
+# Clases para simular objetos de Telegram
+class SimulatedUser:
+    def __init__(self, user_id):
+        self.id = user_id
+
+class SimulatedMessage:
+    def __init__(self, chat_id, text):
+        self.chat_id = chat_id
+        self.text = text
+        
+    async def reply_text(self, text, **kwargs):
+        # Se debe proporcionar context al usar esta función
+        return await self._context.bot.send_message(chat_id=self.chat_id, text=text, **kwargs)
+        
+    async def reply_audio(self, **kwargs):
+        # Se debe proporcionar context al usar esta función
+        return await self._context.bot.send_audio(chat_id=self.chat_id, **kwargs)
+    
+class SimulatedUpdate:
+    def __init__(self, chat_id, user_id, text, context):
+        self.message = SimulatedMessage(chat_id, text)
+        self.effective_user = SimulatedUser(user_id)
+        # Proporcionar context a SimulatedMessage
+        self.message._context = context
+
+# Función auxiliar para crear objetos simulados
+def create_simulated_update(query, context, url):
+    """
+    Crea un objeto Update simulado a partir de un callback query.
+    
+    Args:
+        query: Objeto CallbackQuery de Telegram
+        context: Contexto del bot
+        url: URL a incluir como texto del mensaje
+    
+    Returns:
+        Objeto SimulatedUpdate para usar en funciones de manejo de mensajes
+    """
+    chat_id = query.message.chat_id
+    user_id = query.from_user.id
+    return SimulatedUpdate(chat_id, user_id, url, context)
+
 
 # Definir formatos de audio
 class TrackFormats:
@@ -48,7 +92,7 @@ def extract_id_from_url(url: str) -> str:
     for pattern in [DEEZER_TRACK_REGEX, DEEZER_ALBUM_REGEX, DEEZER_PLAYLIST_REGEX]:
         match = re.match(pattern, url)
         if match:
-            return match.group(3)
+            return match.group(3) # El ID está en el grupo de captura 3
     return ""
 
 # Añadir al inicio del archivo, después de las importaciones
@@ -317,6 +361,10 @@ async def handle_message(
     print(" - - - Dentro de handle message - - -")
     try:
         url = update.message.text.strip()
+        user_id = update.effective_user.id
+        
+        # Obtener sesión de usuario
+        session = UserSession.get_session(user_id)
         
         # Validar URL
         if validate_deezer_url(url):
@@ -324,12 +372,12 @@ async def handle_message(
             content_type = get_content_type(url)
             content_id = extract_id_from_url(url)
             
-            # Importar y seleccionar la estrategia adecuada
-            from content_processors import strategy_map
-            processor = strategy_map.get(content_type)
-            
-            if processor:
-                await processor.process(update, context, dz, settings, vault_chat_id, listener, url, content_id)
+            if content_type == "track":
+                print(f" - - - Usando {content_type} - - -")
+                await process_track(update, context, url, content_id, dz, settings, vault_chat_id, listener)
+            elif content_type in ["album", "playlist"]:
+                print(f" - - - Usando {content_type} - - -")
+                await process_collection(update, context, url, content_type, content_id, dz, settings, vault_chat_id, listener)
             else:
                 await update.message.reply_text("🔗 Tipo de contenido no soportado")
         else:
@@ -1008,28 +1056,10 @@ async def start_album_download(query, context, album_id):
     
     # Generar URL de Deezer para el álbum
     album_url = f"https://www.deezer.com/album/{album_id}"
-    
-    # Crear un objeto Update simulado para aprovechar el flujo existente
-    chat_id = query.message.chat_id
-    
-    class SimulatedUpdate:
-        def __init__(self, chat_id):
-            self.message = SimulatedMessage(chat_id)
-            
-    class SimulatedMessage:
-        def __init__(self, chat_id):
-            self.chat_id = chat_id
-            self.text = album_url
-            
-        async def reply_text(self, text, **kwargs):
-            return await context.bot.send_message(chat_id=self.chat_id, text=text, **kwargs)
-            
-        async def reply_audio(self, **kwargs):
-            return await context.bot.send_audio(chat_id=self.chat_id, **kwargs)
-    
-    # Crear update simulado
-    sim_update = SimulatedUpdate(chat_id)
-    
+  
+    # Crear objeto Update simulado
+    sim_update = create_simulated_update(query, context, album_url)
+        
     # Obtener componentes para handle_message
     dz = context.bot_data.get('dz')
     settings = context.bot_data.get('settings', load())
@@ -1046,26 +1076,8 @@ async def start_track_download(query, context, track_id):
     # Generar URL de Deezer para la canción
     track_url = f"https://www.deezer.com/track/{track_id}"
     
-    # Crear un objeto Update simulado
-    chat_id = query.message.chat_id
-    
-    class SimulatedUpdate:
-        def __init__(self, chat_id):
-            self.message = SimulatedMessage(chat_id)
-            
-    class SimulatedMessage:
-        def __init__(self, chat_id):
-            self.chat_id = chat_id
-            self.text = track_url
-            
-        async def reply_text(self, text, **kwargs):
-            return await context.bot.send_message(chat_id=self.chat_id, text=text, **kwargs)
-            
-        async def reply_audio(self, **kwargs):
-            return await context.bot.send_audio(chat_id=self.chat_id, **kwargs)
-    
-    # Crear update simulado
-    sim_update = SimulatedUpdate(chat_id)
+    # Crear objeto Update simulado
+    sim_update = create_simulated_update(query, context, track_url)
     
     # Obtener componentes para handle_message
     dz = context.bot_data.get('dz')
@@ -1075,3 +1087,55 @@ async def start_track_download(query, context, track_id):
     
     # Ejecutar handle_message con la URL de la canción
     await handle_message(sim_update, context, dz, settings, vault_chat_id, listener)
+    
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Muestra estadísticas de uso del bot."""
+    try:
+        # Obtener datos para las estadísticas
+        vault = load_vault()
+        total_tracks = len(vault.keys())
+        
+        # Obtener información sobre directorios de descargas
+        download_dir = os.path.abspath("./descargas")
+        stats_text = (
+            "📊 *Estadísticas de MelodifyDeluxe*\n\n"
+            f"🎵 Total de pistas en caché: {total_tracks}\n"
+            f"💾 Directorio de descargas: `{download_dir}`\n"
+        )
+        
+        # Añadir más estadísticas si están disponibles
+        if os.path.exists(download_dir):
+            files_count = len([f for f in os.listdir(download_dir) if os.path.isfile(os.path.join(download_dir, f))])
+            total_size = sum(os.path.getsize(os.path.join(download_dir, f)) for f in os.listdir(download_dir) if os.path.isfile(os.path.join(download_dir, f)))
+            size_mb = total_size / (1024 * 1024)
+            
+            stats_text += (
+                f"📁 Archivos temporales: {files_count}\n"
+                f"📦 Tamaño en disco: {size_mb:.2f} MB\n"
+            )
+        
+        # Configuración actual
+        settings = context.bot_data.get('settings', load())
+        bitrate = settings.get("maxBitrate", 3)
+        
+        # Mapear valores de bitrate a nombres legibles
+        bitrate_names = {
+            1: "MP3 128kbps",
+            3: "MP3 320kbps",
+            9: "FLAC (Calidad máxima)"
+        }
+        
+        stats_text += (
+            f"\n⚙️ *Configuración actual:*\n"
+            f"🎚️ Calidad: {bitrate_names.get(bitrate, 'Desconocida')}\n"
+        )
+        
+        await update.message.reply_text(
+            stats_text,
+            parse_mode="Markdown"
+        )
+        
+    except Exception as e:
+        logging.error(f"Error al mostrar estadísticas: {str(e)}", exc_info=True)
+        await update.message.reply_text("❌ Error al generar estadísticas.")

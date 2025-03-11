@@ -1,7 +1,6 @@
 import os
 import asyncio
 import logging
-# import concurrent.futures
 from dotenv import load_dotenv
 from telegram.ext import (
     ApplicationBuilder,
@@ -12,6 +11,7 @@ from telegram.ext import (
 )
 from deezer import Deezer
 from deemix.settings import load, save
+from user_session import cleanup_sessions, UserSession
 
 # Cargar variables de entorno desde .env
 load_dotenv()
@@ -22,7 +22,7 @@ DEEZER_AR = os.environ.get("DEEZER_AR")
 VAULT_CHATID = os.environ.get("VAULT_CHATID")
 
 from downloader import LogListener
-from bot import start, handle_message, configuracion, config_callback, process_search_callback
+from bot import start, handle_message, configuracion, config_callback, process_search_callback, stats_command
 
 # Configuración del logging con formato claro
 logging.basicConfig(
@@ -41,28 +41,57 @@ async def error_handler(update, context):
     if update and update.effective_message:
         await update.effective_message.reply_text("⚠️ Ocurrió un error al procesar tu solicitud. Inténtalo de nuevo más tarde.")
 
+
+async def handle_message_with_user_session(update, context, dz, settings, vault_chat_id, listener):
+    """Wrapper para handle_message que gestiona la sesión de usuario"""
+    try:
+        user_id = update.effective_user.id
+        session = UserSession.get_session(user_id)
+        session.update_activity()
+        
+        # Usando una restricción de tasa para no sobrecargar
+        await session.wait_for_rate_limit()
+        
+        # Llamar a la función original de manejo de mensajes
+        await handle_message(update, context, dz, settings, vault_chat_id, listener)
+    except Exception as e:
+        logging.error(f"Error en handle_message_with_user_session: {e}", exc_info=True)
+        await update.message.reply_text("❌ Error al procesar tu solicitud. Por favor, inténtalo de nuevo.")
+
+
+
 async def main():
     try:
+        logging.info("Iniciando el bot...")
+        
         # Verificar que las variables de entorno estén configuradas
         if not BOT_TOKEN:
             raise Exception("La variable de entorno TELEGRAM_TOKEN no está configurada en el archivo .env")
+        logging.info("Token de Telegram encontrado")
+        
         if not DEEZER_AR:
             raise Exception("La variable de entorno DEEZER_AR no está configurada en el archivo .env")
+        logging.info("ARL de Deezer encontrado")
         
+        logging.info(f"Creando directorio de descargas: {DOWNLOAD_PATH}")
         os.makedirs(DOWNLOAD_PATH, exist_ok=True)
         
         # Configurar settings
+        logging.info("Cargando configuración de deemix...")
         settings = load()
         settings["downloadLocation"] = os.path.abspath(DOWNLOAD_PATH)
         save(settings)
         
         # Inicializar Deezer
+        logging.info("Iniciando sesión en Deezer...")
         dz = Deezer()
         if not dz.login_via_arl(DEEZER_AR):
             raise Exception("Fallo en la autenticación: verifica tu ARL.")
+        logging.info("Sesión iniciada exitosamente")
         
         listener = LogListener()
         
+        logging.info("Creando aplicación de Telegram...")
         app = ApplicationBuilder().token(BOT_TOKEN).build()
         
         # Guardar settings y componentes en el contexto del bot
@@ -74,19 +103,31 @@ async def main():
         # Registrar handlers
         app.add_handler(CommandHandler("start", start))
         app.add_handler(CommandHandler("config", configuracion))
+        app.add_handler(CommandHandler("stats", stats_command))
         app.add_handler(CallbackQueryHandler(config_callback, pattern="^[0-9]+$"))
         app.add_handler(CallbackQueryHandler(process_search_callback, pattern="^(search|artist|artist_menu|download|back)"))
         app.add_handler(MessageHandler(
             filters.TEXT,
-            lambda u, c: handle_message(u, c, dz, settings, VAULT_CHATID, listener)
+            lambda update, context: asyncio.create_task(
+                handle_message_with_user_session(update, context, dz, settings, VAULT_CHATID, listener)
+            )
         ))
         
         # Registrar handler de errores
         app.add_error_handler(error_handler)
         
+        # Iniciar tarea de limpieza de sesiones inactivas
+        asyncio.create_task(cleanup_sessions())
+        logging.info("Tarea de limpieza de sesiones inactivas iniciada")
+        
         await app.initialize()
         await app.start()
         await app.updater.start_polling()
+        
+        # Log inicial
+        logging.info("Bot iniciado y listo para recibir mensajes")
+        logging.info(f"Directorio de descargas: {os.path.abspath(DOWNLOAD_PATH)}")
+        
         await asyncio.Event().wait()
         
     except Exception as e:
