@@ -3,11 +3,19 @@ import time
 import logging
 from typing import Dict, Any, Optional
 from deemix.settings import load as load_settings
+from config import (
+    RATE_LIMIT_MAX_REQUESTS,
+    RATE_LIMIT_TIME_WINDOW,
+    MAX_CONCURRENT_DOWNLOADS_PER_USER,
+    MAX_CONCURRENT_DOWNLOADS_GLOBAL,
+    SESSION_TIMEOUT,
+    SESSION_CLEANUP_INTERVAL
+)
 
 class RateLimiter:
     """Controla la tasa de solicitudes por usuario."""
     
-    def __init__(self, max_requests: int = 5, time_window: int = 60):
+    def __init__(self, max_requests: int = RATE_LIMIT_MAX_REQUESTS, time_window: int = RATE_LIMIT_TIME_WINDOW):
         """
         Inicializa el limitador de tasa.
         
@@ -50,7 +58,7 @@ class RateLimiter:
 class DownloadQueue:
     """Gestiona una cola de descargas para un usuario."""
     
-    def __init__(self, max_concurrent: int = 2):
+    def __init__(self, max_concurrent: int = MAX_CONCURRENT_DOWNLOADS_PER_USER):
         """
         Inicializa la cola de descargas.
         
@@ -124,7 +132,7 @@ class UserSession:
     # Diccionario compartido para almacenar todas las sesiones activas
     _sessions: Dict[int, "UserSession"] = {}
     # Semáforo global para limitar las descargas concurrentes en todo el sistema
-    _global_semaphore = asyncio.Semaphore(10)
+    _global_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS_GLOBAL)
     
     @classmethod
     def get_session(cls, user_id: int) -> "UserSession":
@@ -181,7 +189,7 @@ class UserSession:
         """Actualiza el timestamp de la última actividad."""
         self.last_activity = time.time()
     
-    def is_expired(self, timeout: int = 3600) -> bool:
+    def is_expired(self, timeout: int = SESSION_TIMEOUT) -> bool:
         """
         Verifica si la sesión ha expirado por inactividad.
         
@@ -258,4 +266,4 @@ async def cleanup_sessions():
             logging.error(f"Error en limpieza de sesiones: {str(e)}", exc_info=True)
         
         # Esperar antes de la próxima limpieza
-        await asyncio.sleep(600)  # 10 minutos
+        await asyncio.sleep(SESSION_CLEANUP_INTERVAL)  # 10 minutos

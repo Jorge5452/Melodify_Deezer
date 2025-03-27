@@ -12,6 +12,13 @@ from deemix.settings import load, save
 from user_session import UserSession
 import requests
 from io import BytesIO
+from config import (
+    BATCH_SIZE,
+    TrackFormats,
+    DEEZER_TRACK_REGEX,
+    DEEZER_ALBUM_REGEX,
+    DEEZER_PLAYLIST_REGEX
+)
 
 # Clases para simular objetos de Telegram
 class SimulatedUser:
@@ -55,48 +62,28 @@ def create_simulated_update(query, context, url):
     user_id = query.from_user.id
     return SimulatedUpdate(chat_id, user_id, url, context)
 
-
-# Definir formatos de audio
-class TrackFormats:
-    FLAC = 9
-    MP3_320 = 3
-    MP3_128 = 1
-    MP4_RA3 = 15
-    MP4_RA2 = 14
-    MP4_RA1 = 13
-    DEFAULT = 8
-    LOCAL = 0
-
-# Expresiones regulares para validar URLs de Deezer
-DEEZER_TRACK_REGEX = r'(https?://)?(www\.)?deezer\.com/(?:\w{2}/)?track/(\d+)'
-DEEZER_ALBUM_REGEX = r'(https?://)?(www\.)?deezer\.com/(?:\w{2}/)?album/(\d+)'
-DEEZER_PLAYLIST_REGEX = r'(https?://)?(www\.)?deezer\.com/(?:\w{2}/)?playlist/(\d+)'
-
 def validate_deezer_url(url: str) -> bool:
     """Valida si una URL es una URL válida de Deezer."""
     patterns = [DEEZER_TRACK_REGEX, DEEZER_ALBUM_REGEX, DEEZER_PLAYLIST_REGEX]
-    return any(re.match(pattern, url) for pattern in patterns)
+    return any(pattern.match(url) for pattern in patterns)
 
 def get_content_type(url: str) -> str:
     """Determina el tipo de contenido de una URL de Deezer."""
-    if re.match(DEEZER_TRACK_REGEX, url):
+    if DEEZER_TRACK_REGEX.match(url):
         return "track"
-    elif re.match(DEEZER_ALBUM_REGEX, url):
+    elif DEEZER_ALBUM_REGEX.match(url):
         return "album"
-    elif re.match(DEEZER_PLAYLIST_REGEX, url):
+    elif DEEZER_PLAYLIST_REGEX.match(url):
         return "playlist"
     return "unknown"
 
 def extract_id_from_url(url: str) -> str:
     """Extrae el ID de una URL de Deezer."""
     for pattern in [DEEZER_TRACK_REGEX, DEEZER_ALBUM_REGEX, DEEZER_PLAYLIST_REGEX]:
-        match = re.match(pattern, url)
+        match = pattern.match(url)
         if match:
-            return match.group(3) # El ID está en el grupo de captura 3
+            return match.group(3)  # El ID está en el grupo de captura 3
     return ""
-
-# Añadir al inicio del archivo, después de las importaciones
-BATCH_SIZE = 5  # Número de pistas por lote
 
 # Primero vamos a añadir una función auxiliar para editar mensajes de forma segura
 async def safe_edit_message(message, text):

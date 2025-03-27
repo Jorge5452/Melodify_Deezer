@@ -1,7 +1,6 @@
 import os
 import asyncio
 import logging
-from dotenv import load_dotenv
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -12,25 +11,23 @@ from telegram.ext import (
 from deezer import Deezer
 from deemix.settings import load, save
 from user_session import cleanup_sessions, UserSession
-
-# Cargar variables de entorno desde .env
-load_dotenv()
-
-# Obtener variables de entorno
-BOT_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-DEEZER_AR = os.environ.get("DEEZER_AR")
-VAULT_CHATID = os.environ.get("VAULT_CHATID")
+from config import (
+    TELEGRAM_TOKEN,
+    DEEZER_ARL,
+    VAULT_CHATID,
+    DOWNLOAD_PATH,
+    LOG_LEVEL,
+    LOG_FORMAT
+)
 
 from downloader import LogListener
 from bot import start, handle_message, configuracion, config_callback, process_search_callback, stats_command
 
 # Configuración del logging con formato claro
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
+    level=getattr(logging, LOG_LEVEL),
+    format=LOG_FORMAT
 )
-
-DOWNLOAD_PATH = "./descargas"
 
 logging.getLogger("telegram").setLevel(logging.WARNING)
 logging.getLogger("deemix").setLevel(logging.INFO)
@@ -59,17 +56,16 @@ async def handle_message_with_user_session(update, context, dz, settings, vault_
         await update.message.reply_text("❌ Error al procesar tu solicitud. Por favor, inténtalo de nuevo.")
 
 
-
 async def main():
     try:
         logging.info("Iniciando el bot...")
         
         # Verificar que las variables de entorno estén configuradas
-        if not BOT_TOKEN:
+        if not TELEGRAM_TOKEN:
             raise Exception("La variable de entorno TELEGRAM_TOKEN no está configurada en el archivo .env")
         logging.info("Token de Telegram encontrado")
         
-        if not DEEZER_AR:
+        if not DEEZER_ARL:
             raise Exception("La variable de entorno DEEZER_AR no está configurada en el archivo .env")
         logging.info("ARL de Deezer encontrado")
         
@@ -85,14 +81,14 @@ async def main():
         # Inicializar Deezer
         logging.info("Iniciando sesión en Deezer...")
         dz = Deezer()
-        if not dz.login_via_arl(DEEZER_AR):
+        if not dz.login_via_arl(DEEZER_ARL):
             raise Exception("Fallo en la autenticación: verifica tu ARL.")
         logging.info("Sesión iniciada exitosamente")
         
         listener = LogListener()
         
         logging.info("Creando aplicación de Telegram...")
-        app = ApplicationBuilder().token(BOT_TOKEN).build()
+        app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
         
         # Guardar settings y componentes en el contexto del bot
         app.bot_data['settings'] = settings

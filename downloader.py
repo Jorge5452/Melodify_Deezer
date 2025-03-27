@@ -8,8 +8,7 @@ from deezer import Deezer
 from deemix import generateDownloadObject
 from deemix.downloader import Downloader
 from user_session import UserSession
-
-DOWNLOAD_PATH = "./descargas"
+from config import DOWNLOAD_PATH
 
 class LogListener:
     def send(self, key, value=None):
