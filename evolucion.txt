@@ -44,3 +44,42 @@ Notas
         - Se mejoro el readme para incluir los comandos para crear el entorno virtual y su uso en linux y windows.
         - Se mejoro el logging de inicio del bot.
 
+
+
+
+error:
+2025-03-26 22:52:49,414 - ERROR - Benny Sings - Dancing In The Dark list index out of range
+Traceback (most recent call last):
+  File "C:\Users\ricar\Documentos\Proyectos\Melodify_Deezer\.venv\Lib\site-packages\deemix\downloader.py", line 468, in downloadWrapper
+    result = self.download(extraData, track)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ricar\Documentos\Proyectos\Melodify_Deezer\.venv\Lib\site-packages\deemix\downloader.py", line 267, in download
+    track = Track().parseData(
+            ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ricar\Documentos\Proyectos\Melodify_Deezer\.venv\Lib\site-packages\deemix\types\Track.py", line 76, in parseData
+    trackAPI_new = map_track(trackAPI_new)
+                   ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ricar\Documentos\Proyectos\Melodify_Deezer\.venv\Lib\site-packages\deezer\utils.py", line 373, in map_track
+    result['preview'] = track['MEDIA'][0]['HREF']
+                        ~~~~~~~~~~~~~~^^^
+IndexError: list index out of range
+2025-03-26 22:52:49,425 - ERROR - Error durante la descarga: No se encontró ningún archivo de audio descargado.
+Traceback (most recent call last):
+  File "C:\Users\ricar\Documentos\Proyectos\Melodify_Deezer\downloader.py", line 116, in sync_download_track
+    raise Exception("No se encontró ningún archivo de audio descargado.")
+Exception: No se encontró ningún archivo de audio descargado.
+2025-03-26 22:52:49,426 - INFO - Todos los archivos encontrados: []
+2025-03-26 22:52:49,427 - ERROR - Error descargando pista 10: No se encontró ningún archivo de audio descargado.
+Traceback (most recent call last):
+  File "C:\Users\ricar\Documentos\Proyectos\Melodify_Deezer\modules\collection_processor.py", line 146, in process_playlist_in_batches
+    file_path = await download_track(track_url, dz, settings, listener)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ricar\Documentos\Proyectos\Melodify_Deezer\downloader.py", line 61, in download_track
+    return await loop.run_in_executor(None, sync_download_track, url, dz, settings, listener)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\Python312\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\ricar\Documentos\Proyectos\Melodify_Deezer\downloader.py", line 116, in sync_download_track
+    raise Exception("No se encontró ningún archivo de audio descargado.")
+Exception: No se encontró ningún archivo de audio descargado.
