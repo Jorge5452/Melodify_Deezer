@@ -4,7 +4,7 @@ import os
 import shutil
 import asyncio
 from typing import List, Union
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaAudio
 from telegram.ext import ContextTypes, CallbackContext
 from vault import load_vault, save_vault, add_to_vault, get_from_vault
 from downloader import download_track, enqueue_download
@@ -98,18 +98,41 @@ def extract_id_from_url(url: str) -> str:
 # Añadir al inicio del archivo, después de las importaciones
 BATCH_SIZE = 5  # Número de pistas por lote
 
+# Primero vamos a añadir una función auxiliar para editar mensajes de forma segura
+async def safe_edit_message(message, text):
+    """
+    Edita un mensaje de forma segura, capturando el error si el contenido no cambia.
+    
+    Args:
+        message: Objeto Message de Telegram
+        text: Nuevo texto para el mensaje
+    """
+    try:
+        await message.edit_text(text)
+    except Exception as e:
+        # Ignorar error específico de mensaje no modificado
+        if "Message is not modified" not in str(e):
+            logging.error(f"Error editando mensaje: {str(e)}")
+
 # Añadir esta nueva función para procesar playlists grandes por lotes
 async def process_playlist_in_batches(update, context, track_urls, track_ids, track_titles, 
                                      dz, settings, listener, vault_chat_id, 
                                      status_message, cache_key, content_type):
     """
-    Procesa una playlist grande en lotes.
+    Procesa una playlist grande en lotes y actualiza el progreso en tiempo real.
     """
     total_tracks = len(track_urls)
     total_batches = (total_tracks + BATCH_SIZE - 1) // BATCH_SIZE  # Redondeo hacia arriba
     
     file_ids_all = []
     successful_tracks = 0
+    last_status_text = ""  # Para evitar actualizar con el mismo texto
+    
+    # Mensaje inicial de progreso
+    await safe_edit_message(status_message, 
+        f"⏳ Descargando canciones: 0/{total_tracks}\n"
+        f"Lote: 1/{total_batches}"
+    )
     
     for batch_num in range(total_batches):
         start_idx = batch_num * BATCH_SIZE
@@ -120,43 +143,63 @@ async def process_playlist_in_batches(update, context, track_urls, track_ids, tr
         batch_ids = track_ids[start_idx:end_idx]
         batch_titles = track_titles[start_idx:end_idx]
         
-        # Actualizar mensaje de estado
-        await status_message.edit_text(
-            f"⏳ Lote {batch_num+1}/{total_batches}: Descargando pistas {start_idx+1}-{end_idx} de {total_tracks}..."
+        # Actualizar mensaje de estado para este lote
+        new_text = (
+            f"⏳ Descargando canciones: {successful_tracks}/{total_tracks}\n"
+            f"Lote: {batch_num+1}/{total_batches}\n"
+            f"Preparando lote..."
         )
+        if new_text != last_status_text:
+            await safe_edit_message(status_message, new_text)
+            last_status_text = new_text
         
-        # Descargar y enviar pistas de este lote
+        # Descargar y preparar pistas de este lote
         file_ids_batch = []
+        
         for i, (track_url, track_id, track_title) in enumerate(zip(batch_urls, batch_ids, batch_titles)):
             try:
-                # Índice global para mensajes
+                # Calcular el índice global de la pista
                 global_idx = start_idx + i
                 
-                # Definir clave de caché para esta pista
-                bitrate = settings.get("maxBitrate", 3)
-                individual_cache_key = f"{track_id}_{bitrate}"
+                # Actualizar mensaje de progreso con la canción actual
+                new_text = (
+                    f"⏳ Descargando canciones: {successful_tracks}/{total_tracks}\n"
+                    f"Lote: {batch_num+1}/{total_batches}\n"
+                    f"Canción actual ({global_idx+1}): {track_title}"
+                )
+                if new_text != last_status_text:
+                    await safe_edit_message(status_message, new_text)
+                    last_status_text = new_text
                 
                 # Verificar si esta pista específica está en caché
-                cached_track = get_from_vault(individual_cache_key)
-                if cached_track:
-                    file_ids_batch.append(cached_track)
-                    file_ids_all.append(cached_track)
-                    await update.message.reply_audio(audio=cached_track)
-                    successful_tracks += 1
-                    continue
+                bitrate = settings.get("maxBitrate", 3)
+                individual_cache_key = f"{track_id}_{bitrate}"
+                cached_file_id = get_from_vault(individual_cache_key)
                 
-                # Actualizar mensaje para esta pista
-                await status_message.edit_text(
-                    f"⏳ Lote {batch_num+1}/{total_batches}: Descargando pista {global_idx+1}/{total_tracks}: {track_title}"
-                )
+                if cached_file_id:
+                    # Si está en caché, usar directamente
+                    file_ids_batch.append(cached_file_id)
+                    file_ids_all.append(cached_file_id)
+                    successful_tracks += 1
+                    
+                    # Actualizar progreso después de cada canción exitosa
+                    new_text = (
+                        f"⏳ Descargando canciones: {successful_tracks}/{total_tracks}\n"
+                        f"Lote: {batch_num+1}/{total_batches}\n"
+                        f"✅ En caché ({global_idx+1}): {track_title}"
+                    )
+                    if new_text != last_status_text:
+                        await safe_edit_message(status_message, new_text)
+                        last_status_text = new_text
+                    continue
                 
                 # Descargar pista individual
                 file_path = await download_track(track_url, dz, settings, listener)
                 
-                # Enviar y guardar en vault
+                # Guardar en vault pero no enviar individualmente
                 file_id = await send_and_save_audio(
                     context, 
-                    update.message.chat_id, 
+                    vault_chat_id,  # Solo enviar al vault, no al usuario todavía
                     file_path, 
                     f"{content_type.title()} pista {global_idx+1}/{total_tracks}: {track_title}", 
                     vault_chat_id, 
@@ -165,36 +208,70 @@ async def process_playlist_in_batches(update, context, track_urls, track_ids, tr
                     track_id=track_id
                 )
                 
-                # Guardar ID en las listas y en vault individual
+                # Guardar ID en las listas
                 file_ids_batch.append(file_id)
                 file_ids_all.append(file_id)
                 add_to_vault(individual_cache_key, file_id)
                 successful_tracks += 1
                 
+                # Actualizar progreso después de cada canción exitosa
+                new_text = (
+                    f"⏳ Descargando canciones: {successful_tracks}/{total_tracks}\n"
+                    f"Lote: {batch_num+1}/{total_batches}\n"
+                    f"✅ Descargada ({global_idx+1}): {track_title}"
+                )
+                if new_text != last_status_text:
+                    await safe_edit_message(status_message, new_text)
+                    last_status_text = new_text
+                
                 # Eliminar archivo temporal
                 if os.path.exists(file_path):
                     os.remove(file_path)
                 
-                # Pequeña pausa entre descargas (solo dentro del lote)
-                if i < len(batch_urls) - 1:
-                    await asyncio.sleep(1)
-                    
             except Exception as e:
                 logging.error(f"Error descargando pista {start_idx+i+1}: {str(e)}", exc_info=True)
                 await update.message.reply_text(f"⚠️ Error con pista {start_idx+i+1}: {track_title}")
         
-        # Pequeña pausa entre lotes
-        if batch_num < total_batches - 1:
-            await asyncio.sleep(3)  # Pausa más larga entre lotes
+        # Enviar audios del lote en un solo mensaje agrupado
+        if file_ids_batch:
+            try:
+                # Actualizar mensaje mientras se envían los archivos
+                new_text = (
+                    f"⏳ Descargando canciones: {successful_tracks}/{total_tracks}\n"
+                    f"Lote: {batch_num+1}/{total_batches}\n"
+                    f"📤 Enviando lote {batch_num+1}..."
+                )
+                if new_text != last_status_text:
+                    await safe_edit_message(status_message, new_text)
+                    last_status_text = new_text
+                
+                await context.bot.send_media_group(
+                    chat_id=update.message.chat_id,
+                    media=[InputMediaAudio(media=file_id) for file_id in file_ids_batch]
+                )
+            except Exception as e:
+                logging.error(f"Error enviando grupo de audios: {str(e)}", exc_info=True)
+                # Intentar enviar uno por uno como fallback
+                for file_id in file_ids_batch:
+                    try:
+                        await context.bot.send_audio(
+                            chat_id=update.message.chat_id,
+                            audio=file_id
+                        )
+                    except:
+                        pass
         
+        # Pausa entre lotes
+        if batch_num < total_batches - 1:
+            await asyncio.sleep(3)
+    
     # Guardar todos los IDs en el vault como playlist/album completo
     if file_ids_all:
         add_to_vault(cache_key, file_ids_all)
-        await status_message.edit_text(
-            f"✅ {content_type.title()} enviado completamente ({successful_tracks}/{total_tracks} pistas)"
-        )
+        new_text = f"✅ {content_type.title()} enviado completamente ({successful_tracks}/{total_tracks} pistas)"
+        await safe_edit_message(status_message, new_text)
     else:
-        await status_message.edit_text(f"❌ No se pudo descargar ninguna pista del {content_type}.")
+        await safe_edit_message(status_message, f"❌ No se pudo descargar ninguna pista del {content_type}.")
     
     return file_ids_all
 
@@ -250,7 +327,7 @@ async def config_callback(update: Update, context: CallbackContext):
     
     await query.edit_message_text(f"✅ Calidad actualizada a: {format_name}")
 
-async def send_and_save_audio(context, chat_id, file_path, caption, vault_chat_id, key, dz=None, track_id=None):
+async def send_and_save_audio(context, chat_id, file_path, caption, vault_chat_id, key, dz=None, track_id=None, send_to_user=False):
     """
     Envía un archivo de audio y lo guarda en el vault.
     
@@ -263,6 +340,7 @@ async def send_and_save_audio(context, chat_id, file_path, caption, vault_chat_i
         key: Clave para el vault
         dz: Objeto Deezer (opcional)
         track_id: ID de la pista de Deezer (opcional)
+        send_to_user: Si es True, también se envía al usuario (por defecto False)
     
     Returns:
         El file_id del audio enviado
@@ -338,11 +416,12 @@ async def send_and_save_audio(context, chat_id, file_path, caption, vault_chat_i
             
         file_id = sent_message.audio.file_id
         
-        # Enviar al usuario con el mismo file_id para mantener los metadatos
-        await context.bot.send_audio(
-            chat_id=chat_id,
-            audio=file_id
-        )
+        # Enviar al usuario solo si se solicita explícitamente
+        if send_to_user and chat_id != vault_chat_id:
+            await context.bot.send_audio(
+                chat_id=chat_id,
+                audio=file_id
+            )
         
         return file_id
     except Exception as e:
@@ -420,7 +499,8 @@ async def process_track(update, context, url, track_id, dz, settings, vault_chat
             vault_chat_id, 
             cache_key,
             dz=dz,
-            track_id=track_id
+            track_id=track_id,
+            send_to_user=True
         )
         
         # Guardar en vault
@@ -448,7 +528,6 @@ async def process_collection(update, context, url, content_type, content_id, dz,
     
     # Si no es ni playlist ni álbum y existe en caché, enviar directamente
     if content_type != "playlist" and content_type != "album" and cached_data and isinstance(cached_data, list):
-        await update.message.reply_text(f"📂 {content_type.title()} encontrado en caché")
         for file_id in cached_data:
             await update.message.reply_audio(audio=file_id)
         return
@@ -556,10 +635,28 @@ async def extract_tracks_info(collection_info, dz):
 async def process_small_collection(update, context, track_urls, track_ids, track_titles,
                                   total_tracks, dz, settings, listener, vault_chat_id,
                                   status_message, cache_key, content_type):
-    """Procesa una colección pequeña de pistas."""
-    file_ids = []
+    """Procesa una colección pequeña de pistas con mensajes de progreso detallados."""
+    file_ids_all = []
+    file_ids_batch = []
+    successful_tracks = 0
+    last_status_text = ""  # Para evitar actualizar con el mismo texto
+    
+    # Mensaje inicial de progreso
+    await safe_edit_message(status_message,
+        f"⏳ Descargando canciones: 0/{total_tracks}"
+    )
+    
     for i, (track_url, track_id, track_title) in enumerate(zip(track_urls, track_ids, track_titles)):
         try:
+            # Actualizar mensaje con la canción actual
+            new_text = (
+                f"⏳ Descargando canciones: {successful_tracks}/{total_tracks}\n"
+                f"Canción actual ({i+1}): {track_title}"
+            )
+            if new_text != last_status_text:
+                await safe_edit_message(status_message, new_text)
+                last_status_text = new_text
+            
             # Definir clave de caché para esta pista
             bitrate = settings.get("maxBitrate", 3)
             individual_cache_key = f"{track_id}_{bitrate}"
@@ -567,12 +664,19 @@ async def process_small_collection(update, context, track_urls, track_ids, track
             # Verificar si esta pista específica está en caché
             cached_track = get_from_vault(individual_cache_key)
             if cached_track:
-                file_ids.append(cached_track)
-                await update.message.reply_audio(audio=cached_track)
+                file_ids_batch.append(cached_track)
+                file_ids_all.append(cached_track)
+                successful_tracks += 1
+                
+                # Actualizar progreso después de cada canción exitosa
+                new_text = (
+                    f"⏳ Descargando canciones: {successful_tracks}/{total_tracks}\n"
+                    f"✅ En caché ({i+1}): {track_title}"
+                )
+                if new_text != last_status_text:
+                    await safe_edit_message(status_message, new_text)
+                    last_status_text = new_text
                 continue
-            
-            # Actualizar mensaje de estado
-            await status_message.edit_text(f"⏳ Descargando pista {i+1}/{total_tracks}: {track_title}")
             
             # Descargar pista individual
             file_path = await download_track(track_url, dz, settings, listener)
@@ -580,7 +684,7 @@ async def process_small_collection(update, context, track_urls, track_ids, track
             # Enviar y guardar en vault
             file_id = await send_and_save_audio(
                 context, 
-                update.message.chat_id, 
+                vault_chat_id,  # Solo enviar al vault primero
                 file_path, 
                 f"{content_type.title()} pista {i+1}/{total_tracks}: {track_title}", 
                 vault_chat_id, 
@@ -589,28 +693,66 @@ async def process_small_collection(update, context, track_urls, track_ids, track
                 track_id=track_id
             )
             
-            # Guardar ID en la lista y en vault individual
-            file_ids.append(file_id)
+            # Guardar ID en las listas
+            file_ids_batch.append(file_id)
+            file_ids_all.append(file_id)
             add_to_vault(individual_cache_key, file_id)
+            successful_tracks += 1
+            
+            # Actualizar progreso después de cada canción exitosa
+            new_text = (
+                f"⏳ Descargando canciones: {successful_tracks}/{total_tracks}\n"
+                f"✅ Descargada ({i+1}): {track_title}"
+            )
+            if new_text != last_status_text:
+                await safe_edit_message(status_message, new_text)
+                last_status_text = new_text
             
             # Eliminar archivo temporal
             if os.path.exists(file_path):
                 os.remove(file_path)
             
-            # Pequeña pausa entre descargas
-            if i < total_tracks - 1:
-                await asyncio.sleep(1)
-            
         except Exception as e:
             logging.error(f"Error descargando pista {i+1}: {str(e)}", exc_info=True)
             await update.message.reply_text(f"⚠️ Error con pista {i+1}: {track_title}")
     
-    # Guardar todos los IDs en el vault como playlist/album
-    if file_ids:
-        add_to_vault(cache_key, file_ids)
-        await status_message.edit_text(f"✅ {content_type.title()} enviado completamente ({len(file_ids)}/{total_tracks} pistas)")
+    # Enviar todos los audios en un solo grupo
+    if file_ids_batch:
+        try:
+            # Actualizar mensaje mientras se envían los archivos
+            new_text = (
+                f"⏳ Descargando canciones: {successful_tracks}/{total_tracks}\n"
+                f"📤 Enviando grupo de audios..."
+            )
+            if new_text != last_status_text:
+                await safe_edit_message(status_message, new_text)
+                last_status_text = new_text
+            
+            await context.bot.send_media_group(
+                chat_id=update.message.chat_id,
+                media=[InputMediaAudio(media=file_id) for file_id in file_ids_batch]
+            )
+        except Exception as e:
+            logging.error(f"Error enviando grupo de audios: {str(e)}", exc_info=True)
+            # Intentar enviar uno por uno como fallback
+            for file_id in file_ids_batch:
+                try:
+                    await context.bot.send_audio(
+                        chat_id=update.message.chat_id,
+                        audio=file_id
+                    )
+                except:
+                    pass
+    
+    # Guardar todos los IDs en el vault como playlist/album completo
+    if file_ids_all:
+        add_to_vault(cache_key, file_ids_all)
+        new_text = f"✅ {content_type.title()} enviado completamente ({successful_tracks}/{total_tracks} pistas)"
+        await safe_edit_message(status_message, new_text)
     else:
-        await status_message.edit_text(f"❌ No se pudo descargar ninguna pista del {content_type}.")
+        await safe_edit_message(status_message, f"❌ No se pudo descargar ninguna pista del {content_type}.")
+    
+    return file_ids_all
 
 # Función para descargar y enviar la vista previa de playlist/álbum
 async def send_collection_preview(update, context, collection_info, content_type, total_tracks):
