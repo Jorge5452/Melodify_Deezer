@@ -52,19 +52,13 @@ logging.getLogger("deemix").setLevel(logging.INFO)
 async def error_handler(update: Optional[Any], context: Any) -> None:
     """
     Maneja excepciones que ocurren en los handlers del bot.
-    
-    Registra el error en los logs y notifica al usuario cuando es posible.
-    
-    Args:
-        update: Objeto de actualización de Telegram que causó el error
-        context: Contexto del handler con información del error
     """
     logging.error(f"Error al procesar la actualización {update}: {context.error}", exc_info=True)
     
     # Notificar al usuario si es posible
     if update and update.effective_message:
         await update.effective_message.reply_text(
-            "⚠️ Ocurrió un error al procesar tu solicitud. Inténtalo de nuevo más tarde."
+            "❌ Algo salió mal. Inténtalo de nuevo por favor."
         )
 
 

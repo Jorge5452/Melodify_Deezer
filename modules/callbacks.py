@@ -64,7 +64,7 @@ async def handle_search_callback(query: CallbackQuery, context: ContextTypes.DEF
     search_query = data[2]  # Término de búsqueda
     
     # Mostrar mensaje de búsqueda en curso
-    await query.edit_message_text(f"🔍 Buscando {search_type}: {search_query}...")
+    await query.edit_message_text(f"🔍 Buscando {search_type}...")
     
     # Obtener cliente Deezer del contexto
     dz = context.bot_data.get('dz')
@@ -74,7 +74,7 @@ async def handle_search_callback(query: CallbackQuery, context: ContextTypes.DEF
     
     # Verificar resultados
     if not results:
-        await query.edit_message_text(f"❌ No se encontraron resultados para: {search_query}")
+        await query.edit_message_text(f"❌ No encontré resultados para '{search_query}'")
         return
     
     # Mostrar resultados según el tipo de búsqueda
@@ -206,14 +206,14 @@ async def handle_back_to_search(query: CallbackQuery, data: List[str]) -> None:
     # Intentar editar, si falla, enviar nuevo mensaje
     try:
         await query.edit_message_text(
-            f"🔍 *Búsqueda: {search_query}*\n\nSelecciona una opción:",
+            f"🔍 *Buscando: {search_query}*\n\n¿Qué estás buscando?",
             reply_markup=reply_markup,
             parse_mode="Markdown"
         )
     except Exception as e:
         logging.warning(f"No se pudo editar el mensaje al volver: {e}")
         await query.message.reply_text(
-            f"🔍 *Búsqueda: {search_query}*\n\nSelecciona una opción:",
+            f"🔍 *Buscando: {search_query}*\n\n¿Qué estás buscando?",
             reply_markup=reply_markup,
             parse_mode="Markdown"
         )

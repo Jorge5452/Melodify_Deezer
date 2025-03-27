@@ -10,22 +10,14 @@ from vault import load_vault
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Maneja el comando /start del bot.
-    
-    Envía un mensaje de bienvenida al usuario con información básica sobre
-    las capacidades del bot y comandos disponibles.
-    
-    Args:
-        update: Objeto Update con la información del mensaje
-        context: Contexto del manejador de mensajes
     """
     help_text = (
-        "👋 *¡Bienvenido a MelodifyDeluxe!*\n\n"
-        "Puedo descargar música de alta calidad desde Deezer.\n\n"
-        "*Comandos disponibles:*\n"
-        "• Envía un enlace de Deezer para descargar una canción, álbum o playlist.\n"
-        "• /config - Configura la calidad de audio.\n"
-        "• /start - Muestra este mensaje de ayuda.\n\n"
-        "🔗 *Ejemplo:* https://www.deezer.com/track/3135556"
+        "👋 *¡Hola! Soy MelodifyDeluxe*\n\n"
+        "Puedo descargar tu música favorita de Deezer. Simplemente:\n"
+        "• Envíame un enlace de Deezer\n"
+        "• Escribe el nombre de una canción para buscarla\n"
+        "• Usa /config para elegir la calidad de audio\n\n"
+        "¡Disfruta tu música! 🎧"
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
@@ -57,7 +49,7 @@ async def configuracion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     # Enviar mensaje con opciones
     await update.message.reply_text(
-        "⚙️ *Configuración de Calidad*\nSelecciona el formato de descarga:",
+        "⚙️ *Elige la calidad de audio:*",
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
@@ -93,7 +85,7 @@ async def config_callback(update: Update, context: CallbackContext) -> None:
     }.get(new_bitrate, "Desconocido")
     
     # Actualizar mensaje con confirmación
-    await query.edit_message_text(f"✅ Calidad actualizada a: {format_name}")
+    await query.edit_message_text(f"✅ Calidad cambiada a: {format_name}")
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """

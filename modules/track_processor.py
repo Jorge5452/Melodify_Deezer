@@ -3,7 +3,7 @@ import os
 from typing import Any, Dict, Union, Optional
 from telegram import Update
 from telegram.ext import ContextTypes
-from downloader import download_track
+from downloader import download_track, TrackPreviewUnavailableError
 from vault import add_to_vault, get_from_vault
 from modules.audio_sender import send_and_save_audio
 from modules.utils import safe_edit_message
@@ -50,19 +50,53 @@ async def process_track(
     
     if cached_data:
         # Si está en caché, enviar directamente sin descargar de nuevo
-        await update.message.reply_text("🎵 Encontrado en caché")
+        await update.message.reply_text("🎵 ¡Ya tengo esta canción! Enviando...")
         await update.message.reply_audio(audio=cached_data)
         return
     
     # Notificar inicio de descarga
-    status_message = await update.message.reply_text("⏳ Descargando pista...")
+    status_message = await update.message.reply_text("⏳ Descargando tu canción...")
     
     try:
+        # Verificar si la pista existe antes de intentar descargarla
+        try:
+            track_info = dz.api.get_track(track_id)
+            if not track_info:
+                await status_message.edit_text("❌ No encuentro esta canción en Deezer. ¿El enlace es correcto?")
+                return
+        except Exception as check_error:
+            logging.warning(f"Error verificando pista {track_id}: {str(check_error)}")
+            # Continuamos con la descarga aunque falle la verificación previa
+        
         # Fase 1: Descargar track
-        file_path = await download_track(url, dz, settings, listener)
+        try:
+            file_path = await download_track(url, dz, settings, listener)
+        except TrackPreviewUnavailableError:
+            await status_message.edit_text(
+                "❌ Esta canción ya no está disponible en Deezer\n"
+                "Es posible que haya sido retirada del catálogo o tenga restricciones"
+            )
+            return
+        except Exception as download_error:
+            error_msg = str(download_error).lower()
+            
+            # Proporcionar mensajes de error específicos según el tipo de problema
+            if "403" in error_msg or "forbidden" in error_msg:
+                await status_message.edit_text("❌ Esta canción no está disponible en tu región")
+            elif "404" in error_msg or "not found" in error_msg:
+                await status_message.edit_text("❌ Esta canción ya no está disponible en Deezer")
+            elif "copyright" in error_msg or "rights" in error_msg:
+                await status_message.edit_text("❌ Esta canción tiene restricciones que impiden su descarga")
+            elif "timeout" in error_msg or "timed out" in error_msg or "connection" in error_msg:
+                await status_message.edit_text("❌ Problemas de conexión. Inténtalo de nuevo")
+            else:
+                await status_message.edit_text(f"❌ No pude descargar la canción")
+            
+            logging.error(f"Error al descargar pista {track_id}: {str(download_error)}", exc_info=True)
+            return
         
         # Fase 2: Notificar avance
-        await status_message.edit_text("✅ Descarga completada. Enviando...")
+        await safe_edit_message(status_message, "✅ ¡Listo! Enviando a Telegram...")
         
         # Fase 3: Enviar y guardar en vault
         file_id = await send_and_save_audio(
@@ -85,9 +119,9 @@ async def process_track(
             os.remove(file_path)
         
         # Fase 6: Actualizar mensaje de estado
-        await status_message.edit_text("✅ Listo")
+        await safe_edit_message(status_message, "✅ ¡Disfruta tu música!")
         
     except Exception as e:
-        # Manejo de errores
-        logging.error(f"Error al descargar: {str(e)}")
-        await status_message.edit_text(f"❌ Error: {str(e)}")
+        # Manejo de errores generales
+        logging.error(f"Error al descargar: {str(e)}", exc_info=True)
+        await safe_edit_message(status_message, "❌ Algo salió mal. Inténtalo de nuevo")

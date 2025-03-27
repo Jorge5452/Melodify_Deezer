@@ -10,12 +10,18 @@ import asyncio
 import logging
 import shutil
 import uuid
+import requests  # Añadido el import faltante de requests
 from typing import Union, List, Dict, Any, Optional, Callable, Awaitable, Tuple
 from deezer import Deezer
 from deemix import generateDownloadObject
 from deemix.downloader import Downloader
 from user_session import UserSession
 from config import DOWNLOAD_PATH
+
+# Definir excepción específica para pistas sin preview
+class TrackPreviewUnavailableError(Exception):
+    """Excepción lanzada cuando una pista no tiene preview disponible en Deezer."""
+    pass
 
 class LogListener:
     """
@@ -129,6 +135,10 @@ def sync_download_track(url: str, dz: Deezer, settings: Dict[str, Any],
         plugins = {}  # Sin plugins adicionales
         download_obj = generateDownloadObject(dz, url, bitrate, plugins, listener)
         
+        # Verificar si el objeto es válido
+        if not download_obj:
+            raise Exception("No se encontró esta canción en Deezer")
+        
         # Extraer información del objeto a descargar para logging
         obj_info = "Objeto a descargar"
         try:
@@ -142,20 +152,78 @@ def sync_download_track(url: str, dz: Deezer, settings: Dict[str, Any],
         logging.info(obj_info)
 
         # Iniciar la descarga utilizando el downloader de deemix
-        Downloader(dz, download_obj, temp_settings, listener).start()
+        downloader = Downloader(dz, download_obj, temp_settings, listener)
+        
+        # Capturar errores específicos durante la descarga
+        try:
+            # Registrar información sobre el objeto a descargar para diagnóstico
+            track_info = None
+            try:
+                # Intentar obtener ID de la URL para diagnosis
+                track_id = url.split("/")[-1]
+                if track_id.isdigit():
+                    track_info = dz.api.get_track(track_id)
+                    if track_info and track_info.get('title'):
+                        logging.info(f"Descargando: {track_info.get('title')} - {track_info.get('artist', {}).get('name', 'Unknown')}")
+            except Exception:
+                pass  # Ignorar errores en la obtención de info para diagnóstico
+
+            downloader.start()
+        except IndexError as e:
+            error_str = str(e)
+            # Capturar el error específico relacionado con MEDIA
+            if 'list index out of range' in error_str:
+                track_title = "canción desconocida"
+                if track_info and track_info.get('title'):
+                    track_title = f"{track_info.get('title')} - {track_info.get('artist', {}).get('name', 'Desconocido')}"
+                
+                logging.error(f"{track_title} list index out of range")
+                raise TrackPreviewUnavailableError(f"La canción '{track_title}' no está disponible en Deezer")
+            else:
+                raise  # Re-lanzar otros errores de índice
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "403" in error_msg or "forbidden" in error_msg:
+                raise Exception("Esta canción no está disponible en tu región")
+            elif "404" in error_msg or "not found" in error_msg:
+                raise Exception("Esta canción ya no está disponible en Deezer")
+            elif "copyright" in error_msg or "rights" in error_msg:
+                raise Exception("Esta canción tiene restricciones de derechos de autor")
+            elif "timeout" in error_msg or "timed out" in error_msg:
+                raise Exception("Problemas de conexión. Inténtalo de nuevo")
+            elif "key error" in error_msg or "missing" in error_msg:
+                raise Exception("Información incompleta para esta canción")
+            else:
+                raise  # Re-lanzar la excepción original para otros casos
         
         # Buscar archivo de audio descargado en el directorio temporal
+        audio_files = []
         for root, _, files in os.walk(temp_dir):
             for file in files:
                 if file.endswith(('.mp3', '.flac', '.m4a')):
                     file_path = os.path.join(root, file)
-                    # Mover a la carpeta principal de descargas
-                    target_path = os.path.join(DOWNLOAD_PATH, file)
-                    shutil.move(file_path, target_path)
-                    return target_path
+                    audio_files.append(file_path)
         
-        raise Exception("No se encontró ningún archivo de audio descargado.")
+        if not audio_files:
+            raise Exception("No se pudo descargar la canción")
+        
+        # Mover el primer archivo a la carpeta principal
+        target_path = os.path.join(DOWNLOAD_PATH, os.path.basename(audio_files[0]))
+        shutil.move(audio_files[0], target_path)
+        return target_path
     
+    except TrackPreviewUnavailableError as e:
+        logging.error(f"Error de preview no disponible: {str(e)}")
+        raise  # Re-lanzar la excepción específica para ser manejada en collection_processor
+    except requests.exceptions.ConnectionError:
+        logging.error("Error de conexión durante la descarga", exc_info=True)
+        raise Exception("Problemas de conexión. Inténtalo más tarde")
+    except requests.exceptions.Timeout:
+        logging.error("Tiempo de espera agotado durante la descarga", exc_info=True)
+        raise Exception("La descarga está tardando demasiado. Inténtalo más tarde")
+    except FileNotFoundError:
+        logging.error("Archivo no encontrado durante el procesamiento", exc_info=True)
+        raise Exception("Esta canción no está disponible actualmente")
     except Exception as e:
         logging.error(f"Error durante la descarga: {str(e)}", exc_info=True)
         raise

@@ -124,17 +124,22 @@ def create_simulated_update(query, context, url):
     return SimulatedUpdate(chat_id, user_id, url, context)
 
 # Funciones auxiliares generales
-async def safe_edit_message(message, text):
+async def safe_edit_message(message, text, parse_mode=None):
     """
-    Edita un mensaje de forma segura, capturando el error si el contenido no cambia.
+    Edita un mensaje de forma segura, manejando posibles errores.
     
     Args:
-        message: Objeto Message de Telegram
+        message: Objeto Message de Telegram a editar
         text: Nuevo texto para el mensaje
+        parse_mode: Modo de formato del texto (None, "Markdown", "HTML")
+        
+    Returns:
+        bool: True si la edición fue exitosa, False en caso contrario
     """
     try:
-        await message.edit_text(text)
+        # Intentar editar el mensaje con el parse_mode especificado
+        await message.edit_text(text, parse_mode=parse_mode)
+        return True
     except Exception as e:
-        # Ignorar error específico de mensaje no modificado
-        if "Message is not modified" not in str(e):
-            logging.error(f"Error editando mensaje: {str(e)}")
+        logging.warning(f"No se pudo editar mensaje: {str(e)}")
+        return False

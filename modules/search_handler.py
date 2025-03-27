@@ -38,14 +38,14 @@ async def show_search_menu(update, context):
     query = update.message.text.strip()
     
     keyboard = [
-        [InlineKeyboardButton("🎤 Buscar por Artista", callback_data=f"search:artist:{query}")],
-        [InlineKeyboardButton("💿 Buscar por Álbum", callback_data=f"search:album:{query}")],
-        [InlineKeyboardButton("🎵 Buscar por Canción", callback_data=f"search:track:{query}")]
+        [InlineKeyboardButton("🎤 Artistas", callback_data=f"search:artist:{query}")],
+        [InlineKeyboardButton("💿 Álbumes", callback_data=f"search:album:{query}")],
+        [InlineKeyboardButton("🎵 Canciones", callback_data=f"search:track:{query}")]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        f"🔍 *Búsqueda: {query}*\n\nSelecciona una opción:",
+        f"🔍 *Buscando: {query}*\n\n¿Qué estás buscando?",
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
@@ -64,7 +64,7 @@ async def show_artist_results(query, results):
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
-        "🎤 *Artistas encontrados:*\n\nSelecciona un artista para ver detalles:",
+        "🎤 *Artistas encontrados:*\n\nSelecciona un artista:",
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
@@ -84,7 +84,7 @@ async def show_album_results(query, results):
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
-        "💿 *Álbumes encontrados:*\n\nSelecciona un álbum para descargar:",
+        "💿 *Álbumes encontrados:*\n\nSelecciona un álbum:",
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
@@ -104,7 +104,7 @@ async def show_track_results(query, results):
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
-        "🎵 *Canciones encontradas:*\n\nSelecciona una canción para descargar:",
+        "🎵 *Canciones encontradas:*\n\nSelecciona una canción:",
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
