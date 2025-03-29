@@ -9,6 +9,7 @@ en funcionamiento.
 import os
 import asyncio
 import logging
+import time
 from typing import Dict, Any, Optional, Tuple
 
 # Componentes de Telegram
@@ -18,6 +19,9 @@ from telegram.ext import (
     MessageHandler,
     CallbackQueryHandler,
     filters,
+    JobQueue,
+    ConversationHandler, 
+    Application
 )
 
 # Componentes de Deezer
@@ -61,6 +65,23 @@ async def error_handler(update: Optional[Any], context: Any) -> None:
             "❌ Algo salió mal. Inténtalo de nuevo por favor."
         )
 
+# Wrapper personalizado para comandos que añade logging
+async def command_wrapper(command_func, update, context):
+    """
+    Wrapper para comandos que añade logs detallados.
+    """
+    user_id = update.effective_user.id if update.effective_user else "desconocido"
+    command = update.message.text if update.message else "callback"
+    
+    logging.info(f"[COMANDO] Recibido: {command} de usuario: {user_id} - timestamp: {time.time()}")
+    
+    try:
+        result = await command_func(update, context)
+        logging.info(f"[COMANDO] Completado: {command} de usuario: {user_id}")
+        return result
+    except Exception as e:
+        logging.error(f"[COMANDO] Error en {command} de usuario {user_id}: {str(e)}", exc_info=True)
+        raise
 
 async def handle_message_with_user_session(
                             update: Any,
@@ -84,16 +105,42 @@ async def handle_message_with_user_session(
     try:
         # Obtener ID del usuario
         user_id = update.effective_user.id
+        message_text = update.message.text[:30] + "..." if len(update.message.text) > 30 else update.message.text
+        
+        logging.info(f"[MENSAJE] Recibido: '{message_text}' de usuario: {user_id} - timestamp: {time.time()}")
         
         # Obtener o crear sesión de usuario
         session = UserSession.get_session(user_id)
         session.update_activity()
         
         # Aplicar límite de tasa para evitar sobrecarga
+        logging.info(f"[MENSAJE] Esperando límite de tasa para usuario: {user_id}")
         await session.wait_for_rate_limit()
+        logging.info(f"[MENSAJE] Límite de tasa liberado para usuario: {user_id}")
         
-        # Llamar a la función principal de manejo de mensajes
-        await handle_message(update, context, dz, settings, vault_chat_id, listener)
+        # Usar JobQueue para tareas pesadas
+        # Primero enviar una respuesta inmediata
+        logging.info(f"[MENSAJE] Procesando mensaje de usuario: {user_id} en JobQueue")
+        
+        # Para evitar bloquear, usamos el job_queue para procesar mensajes pesados
+        if "job_queue" in context.application.bot_data and context.application.bot_data["job_queue"]:
+            logging.info(f"[MENSAJE] Añadiendo a job_queue para usuario: {user_id}")
+            
+            # Crear un trabajo que se ejecute inmediatamente
+            context.application.bot_data["job_queue"].run_once(
+                lambda job_context: asyncio.create_task(
+                    handle_message(update, context, dz, settings, vault_chat_id, listener)
+                ),
+                0  # Ejecutar inmediatamente
+            )
+            logging.info(f"[MENSAJE] Añadido con éxito a job_queue para usuario: {user_id}")
+        else:
+            # Llamar a la función principal de manejo de mensajes directamente
+            logging.info(f"[MENSAJE] Sin job_queue disponible, procesando directamente para usuario: {user_id}")
+            await handle_message(update, context, dz, settings, vault_chat_id, listener)
+            
+        logging.info(f"[MENSAJE] Handler completado para usuario: {user_id}")
+        
     except Exception as e:
         logging.error(f"Error en handle_message_with_user_session: {e}", exc_info=True)
         await update.message.reply_text("❌ Error al procesar tu solicitud. Por favor, inténtalo de nuevo.")
@@ -138,9 +185,16 @@ async def main() -> None:
         # Crear listener para logs de deemix
         listener = LogListener()
         
-        # Inicializar aplicación de Telegram
-        logging.info("Creando aplicación de Telegram...")
-        app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+        # Inicializar aplicación de Telegram con JobQueue
+        logging.info("Creando aplicación de Telegram con JobQueue...")
+        app = ApplicationBuilder().token(TELEGRAM_TOKEN).concurrent_updates(True).build()
+        
+        # Activar JobQueue para tareas pesadas
+        job_queue = JobQueue()
+        job_queue.set_application(app)
+        app.bot_data["job_queue"] = job_queue
+        await job_queue.start()
+        logging.info("JobQueue iniciada correctamente")
         
         # Guardar componentes en el contexto global del bot
         app.bot_data['settings'] = settings
@@ -148,22 +202,25 @@ async def main() -> None:
         app.bot_data['listener'] = listener
         app.bot_data['vault_chat_id'] = VAULT_CHATID
         
-        # Registrar handlers para comandos
-        app.add_handler(CommandHandler("start", start))
-        app.add_handler(CommandHandler("config", configuracion))
-        app.add_handler(CommandHandler("stats", stats_command))
+        # Registrar handlers para comandos con wrappers de logging
+        logging.info("Registrando handlers de comandos...")
+        app.add_handler(CommandHandler("start", lambda update, context: command_wrapper(start, update, context)))
+        app.add_handler(CommandHandler("config", lambda update, context: command_wrapper(configuracion, update, context)))
+        app.add_handler(CommandHandler("stats", lambda update, context: command_wrapper(stats_command, update, context)))
         
         # Registrar handlers para callbacks
         app.add_handler(CallbackQueryHandler(config_callback, pattern="^[0-9]+$"))
         app.add_handler(CallbackQueryHandler(process_search_callback, pattern="^(search|artist|artist_menu|download|back)"))
         
         # Registrar handler para mensajes de texto
-        app.add_handler(MessageHandler(
-            filters.TEXT,
-            lambda update, context: asyncio.create_task(
-                handle_message_with_user_session(update, context, dz, settings, VAULT_CHATID, listener)
+        logging.info("Registrando handler de mensajes...")
+        async def message_handler(update, context):
+            # Pasar los datos necesarios desde el contexto global
+            await handle_message_with_user_session(
+                update, context, dz, settings, VAULT_CHATID, listener
             )
-        ))
+            
+        app.add_handler(MessageHandler(filters.TEXT, message_handler))
         
         # Registrar handler de errores
         app.add_error_handler(error_handler)
