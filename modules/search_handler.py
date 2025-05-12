@@ -287,8 +287,14 @@ async def start_album_download(query, context, album_id):
     # Generar URL de Deezer para el álbum
     album_url = f"https://www.deezer.com/album/{album_id}"
   
+    # Obtener user_id para las estadísticas
+    user_id = query.from_user.id
+    
     # Crear objeto Update simulado
     sim_update = create_simulated_update(query, context, album_url)
+    
+    # Configurar user_id en effective_user que ya existe en el SimulatedUpdate
+    sim_update.effective_user.id = user_id
         
     # Obtener componentes para handle_message
     dz = context.bot_data.get('dz')
@@ -309,8 +315,14 @@ async def start_track_download(query, context, track_id):
     # Generar URL de Deezer para la canción
     track_url = f"https://www.deezer.com/track/{track_id}"
     
+    # Obtener user_id para las estadísticas
+    user_id = query.from_user.id
+    
     # Crear objeto Update simulado
     sim_update = create_simulated_update(query, context, track_url)
+    
+    # Configurar user_id en effective_user que ya existe en el SimulatedUpdate
+    sim_update.effective_user.id = user_id
     
     # Obtener componentes para handle_message
     dz = context.bot_data.get('dz')

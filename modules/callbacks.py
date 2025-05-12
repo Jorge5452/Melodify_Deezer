@@ -1,14 +1,19 @@
 import logging
 from typing import List, Dict, Any, Callable, Awaitable
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery, Update
 from telegram.ext import ContextTypes, CallbackContext
 from modules.search_handler import (
     search_content, show_artist_results, show_album_results, 
     show_track_results, show_artist_info, show_artist_albums,
     show_artist_top_tracks, start_album_download, start_track_download
 )
+from modules.decorators import (
+    with_error_handling, with_user_session, combined_decorator,
+    with_callback_error_handling, with_callback_user_session, combined_callback_decorator
+)
 
-async def process_search_callback(update: Any, context: ContextTypes.DEFAULT_TYPE) -> None:
+@with_error_handling
+async def process_search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Procesa los callbacks de los botones de búsqueda.
     
@@ -44,6 +49,7 @@ async def process_search_callback(update: Any, context: ContextTypes.DEFAULT_TYP
     else:
         logging.warning(f"Acción desconocida: {action}")
 
+@with_callback_error_handling
 async def handle_search_callback(query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, data: List[str]) -> None:
     """
     Maneja la acción de búsqueda.
@@ -85,6 +91,7 @@ async def handle_search_callback(query: CallbackQuery, context: ContextTypes.DEF
     elif search_type == "track":
         await show_track_results(query, results)
 
+@with_callback_error_handling
 async def handle_artist_callback(query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, data: List[str]) -> None:
     """
     Maneja la acción de selección de artista.
@@ -106,6 +113,7 @@ async def handle_artist_callback(query: CallbackQuery, context: ContextTypes.DEF
     # Mostrar información del artista
     await show_artist_info(query, context, artist_id)
 
+@with_callback_error_handling
 async def handle_artist_menu_callback(query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, data: List[str]) -> None:
     """
     Maneja las opciones del menú de artista.
@@ -131,6 +139,8 @@ async def handle_artist_menu_callback(query: CallbackQuery, context: ContextType
     elif option == "top":
         await show_artist_top_tracks(query, context, artist_id)
 
+@with_callback_error_handling
+@with_callback_user_session
 async def handle_download_callback(query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, data: List[str]) -> None:
     """
     Maneja la acción de descarga desde los resultados de búsqueda.
@@ -155,6 +165,7 @@ async def handle_download_callback(query: CallbackQuery, context: ContextTypes.D
     elif content_type == "track":
         await start_track_download(query, context, content_id)
 
+@with_callback_error_handling
 async def handle_back_callback(query: CallbackQuery, context: ContextTypes.DEFAULT_TYPE, data: List[str]) -> None:
     """
     Maneja la acción de volver atrás en la navegación.
@@ -180,6 +191,7 @@ async def handle_back_callback(query: CallbackQuery, context: ContextTypes.DEFAU
             artist_id = data[2]
             await show_artist_info(query, context, artist_id)
 
+@with_callback_error_handling
 async def handle_back_to_search(query: CallbackQuery, data: List[str]) -> None:
     """
     Maneja la acción de volver al menú de búsqueda.
@@ -200,20 +212,12 @@ async def handle_back_to_search(query: CallbackQuery, data: List[str]) -> None:
         [InlineKeyboardButton("💿 Buscar por Álbum", callback_data=f"search:album:{search_query}")],
         [InlineKeyboardButton("🎵 Buscar por Canción", callback_data=f"search:track:{search_query}")]
     ]
-    
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # Intentar editar, si falla, enviar nuevo mensaje
-    try:
-        await query.edit_message_text(
-            f"🔍 *Buscando: {search_query}*\n\n¿Qué estás buscando?",
-            reply_markup=reply_markup,
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        logging.warning(f"No se pudo editar el mensaje al volver: {e}")
-        await query.message.reply_text(
-            f"🔍 *Buscando: {search_query}*\n\n¿Qué estás buscando?",
-            reply_markup=reply_markup,
-            parse_mode="Markdown"
-        )
+    await query.edit_message_text(
+        f"🔍 *Búsqueda de música*\n\n"
+        f"Término de búsqueda: *{search_query}*\n\n"
+        f"Selecciona el tipo de búsqueda:",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )

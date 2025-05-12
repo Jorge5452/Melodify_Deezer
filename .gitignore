@@ -8,6 +8,7 @@ vault_data.json
 tracks_vault.json
 deluxe/
 linux/
+.venv/
 
 # Archivos sensibles
 *.env

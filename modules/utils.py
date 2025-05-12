@@ -1,8 +1,13 @@
 import logging
 import asyncio
-from typing import List, Union, Optional, Any, Dict
+import random
+from typing import List, Union, Optional, Any, Dict, Callable, TypeVar, Awaitable
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaAudio, Message
 from telegram.ext import ContextTypes
+from telegram.error import TimedOut, RetryAfter, NetworkError
+
+# Define el tipo para funciones asíncronas genéricas
+T = TypeVar('T')
 
 class SimulatedUser:
     """
@@ -143,3 +148,80 @@ async def safe_edit_message(message, text, parse_mode=None):
     except Exception as e:
         logging.warning(f"No se pudo editar mensaje: {str(e)}")
         return False
+
+async def retry_async_operation(func: Callable[..., Awaitable[T]], 
+                               max_retries: int = 3, 
+                               initial_delay: float = 1.0, 
+                               jitter: float = 0.1,
+                               backoff_factor: float = 2.0,
+                               *args: Any, 
+                               **kwargs: Any) -> T:
+    """
+    Ejecuta una operación asíncrona con reintentos automáticos y backoff exponencial.
+    
+    Esta función es útil para operaciones de red que pueden fallar temporalmente,
+    como envíos de archivos a Telegram o peticiones a APIs externas.
+    
+    Args:
+        func: Función asíncrona a ejecutar
+        max_retries: Número máximo de reintentos (default: 3)
+        initial_delay: Tiempo de espera inicial en segundos (default: 1.0)
+        jitter: Factor de aleatoriedad para evitar tormentas de reintentos (default: 0.1)
+        backoff_factor: Factor para incrementar el tiempo de espera (default: 2.0)
+        *args, **kwargs: Argumentos para pasar a la función
+        
+    Returns:
+        El resultado de la función ejecutada exitosamente
+        
+    Raises:
+        Exception: Re-lanza la última excepción después de agotar los reintentos
+    """
+    delay = initial_delay
+    last_exception = None
+    
+    # Intentar la operación hasta max_retries veces
+    for attempt in range(max_retries + 1):
+        try:
+            # Ejecutar la función
+            return await func(*args, **kwargs)
+            
+        except (TimedOut, NetworkError) as e:
+            last_exception = e
+            # Solo registrar el error y reintentar si no es el último intento
+            if attempt < max_retries:
+                # Añadir jitter para evitar sincronización de reintentos
+                jitter_value = random.uniform(-jitter, jitter) * delay
+                current_delay = delay + jitter_value
+                
+                logging.warning(
+                    f"Intento {attempt+1}/{max_retries+1} falló con error: {str(e)}. "
+                    f"Reintentando en {current_delay:.2f}s"
+                )
+                
+                # Esperar antes del siguiente intento
+                await asyncio.sleep(current_delay)
+                
+                # Incrementar el tiempo de espera para el próximo reintento
+                delay *= backoff_factor
+                
+        except RetryAfter as e:
+            last_exception = e
+            # Para RetryAfter, esperar el tiempo específico indicado por Telegram
+            retry_after = e.retry_after
+            
+            if attempt < max_retries:
+                logging.warning(
+                    f"Rate limit alcanzado. Intento {attempt+1}/{max_retries+1} falló. "
+                    f"Esperando {retry_after}s según indicado por Telegram"
+                )
+                
+                await asyncio.sleep(retry_after)
+                
+        except Exception as e:
+            # Para otros errores, no reintentar
+            logging.error(f"Error no recuperable en intento {attempt+1}: {str(e)}")
+            raise
+    
+    # Si llegamos aquí, se agotaron los reintentos
+    logging.error(f"Operación falló después de {max_retries+1} intentos: {str(last_exception)}")
+    raise last_exception

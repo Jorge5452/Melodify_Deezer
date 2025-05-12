@@ -5,8 +5,11 @@ from user_session import UserSession
 from modules.validation import validate_deezer_url, get_content_type, extract_id_from_url
 from modules.track_processor import process_track
 from modules.collection_processor import process_collection
+from modules.search_engine import show_search_menu
+from modules.decorators import combined_decorator
 from downloader import enqueue_download
 
+@combined_decorator
 async def handle_message(
     update: Update, 
     context: ContextTypes.DEFAULT_TYPE, 
@@ -18,10 +21,22 @@ async def handle_message(
     """Maneja los mensajes entrantes, procesando URLs de Deezer o búsquedas."""
     try:
         url = update.message.text.strip()
-        user_id = update.effective_user.id
+        session = context.user_data.get('session')
         
-        # Obtener sesión de usuario
-        session = UserSession.get_session(user_id)
+        # Verificar límite mensual para usuarios normales
+        if session and session.get_role() == "normal":
+            # Verificar si el usuario está cerca de su límite mensual
+            monthly_stats = session.get_monthly_downloads_left()
+            remaining = monthly_stats['remaining']
+            
+            # Mostrar una advertencia si quedan pocas descargas
+            if 0 < remaining <= 20:
+                await update.message.reply_text(
+                    f"⚠️ *Aviso: Te quedan solo {remaining} descargas* este mes.\n"
+                    f"Has usado {monthly_stats['used']} de {monthly_stats['limit']} descargas mensuales.\n"
+                    f"Considera donar para mantener el servicio y obtener beneficios adicionales.",
+                    parse_mode="Markdown"
+                )
         
         # Validar URL
         if validate_deezer_url(url):
@@ -40,18 +55,19 @@ async def handle_message(
                 await process_track(update, context, url, content_id, dz, settings, vault_chat_id, listener)
             elif content_type in ["album", "playlist"]:
                 # Para colecciones (que llevan más tiempo), usar el sistema de colas
+                user_id = update.effective_user.id
                 success = await enqueue_download(
                     user_id, 
                     process_collection, 
-                    update, 
-                    context, 
-                    url, 
-                    content_type, 
-                    content_id, 
-                    dz, 
-                    settings, 
-                    vault_chat_id, 
-                    listener
+                    update=update, 
+                    context=context, 
+                    url=url, 
+                    content_type=content_type, 
+                    content_id=content_id, 
+                    dz=dz, 
+                    settings=settings, 
+                    vault_chat_id=vault_chat_id, 
+                    listener=listener
                 )
                 
                 if success:
@@ -67,10 +83,8 @@ async def handle_message(
                 await update.message.reply_text("🔗 Tipo de contenido no soportado")
         else:
             # Si no es una URL, tratar como búsqueda
-            # Importamos aquí para evitar la importación circular
-            from modules.search_handler import show_search_menu
             await show_search_menu(update, context)
             
     except Exception as e:
-        logging.error(f"Error crítico: {str(e)}", exc_info=True)
+        logging.error(f"Error crítico en handle_message: {str(e)}", exc_info=True)
         await update.message.reply_text("⚠️ Error procesando tu solicitud")

@@ -18,7 +18,7 @@ from deemix import generateDownloadObject
 from deemix.downloader import Downloader
 from user_session import UserSession
 from config import DOWNLOAD_PATH, MAX_CONCURRENT_DOWNLOADS_PER_USER
-from modules.validation import get_content_type
+from modules.queue_manager import QueueManager
 
 # Definir excepción específica para pistas sin preview
 class TrackPreviewUnavailableError(Exception):
@@ -41,8 +41,7 @@ class LogListener:
         logging.debug(f"[DEEMIX] {key}: {value}")
 
 async def download_track(url: str, dz: Deezer, settings: Dict[str, Any], 
-                         listener: LogListener, user_id: Optional[int] = None,
-                         collection_temp_dir: Optional[str] = None) -> Union[str, List[str]]:
+                         listener: LogListener, user_id: Optional[int] = None) -> Union[str, List[str]]:
     """
     Descarga una pista, álbum o playlist de Deezer con gestión de concurrencia.
     
@@ -52,7 +51,6 @@ async def download_track(url: str, dz: Deezer, settings: Dict[str, Any],
         settings: Diccionario con la configuración de descarga
         listener: Instancia de LogListener para recibir eventos de progreso
         user_id: ID opcional del usuario para gestión de recursos y límites
-        collection_temp_dir: Directorio temporal para colecciones (álbum/playlist)
         
     Returns:
         Ruta al archivo descargado o lista de rutas para álbumes/playlists
@@ -64,58 +62,43 @@ async def download_track(url: str, dz: Deezer, settings: Dict[str, Any],
     start_time = time.time()
     logging.info(f"[DOWNLOADER] Iniciando descarga de URL: {url} para usuario: {user_id}, timestamp: {start_time}")
     
-    # Si se proporciona user_id, usar el semáforo global para controlar concurrencia
+    # Si se proporciona user_id, usar el gestor de colas para controlar concurrencia
     if user_id:
-        # Obtener sesión de usuario
-        logging.info(f"[DOWNLOADER] Obteniendo sesión para usuario: {user_id}")
+        # Obtener gestor de colas
+        queue_manager = QueueManager.get_instance()
+        
+        # Obtener sesión de usuario para estadísticas
         session = UserSession.get_session(user_id)
-        # Actualizar actividad
         session.update_activity()
-        # Controlar tasa de solicitudes
-        logging.info(f"[DOWNLOADER] Esperando límite de tasa para usuario: {user_id}")
-        await session.wait_for_rate_limit()
-        logging.info(f"[DOWNLOADER] Límite de tasa liberado para usuario: {user_id}")
         
-        # Obtener semáforo global
-        logging.info(f"[DOWNLOADER] Esperando semáforo global para usuario: {user_id}")
-        global_semaphore = await UserSession.get_global_semaphore()
-        logging.info(f"[DOWNLOADER] Semáforo global adquirido para usuario: {user_id}")
-        
-        # Usar semáforo global para limitar descargas concurrentes
-        async with global_semaphore:
+        try:
             # Incrementar contador de descargas activas
             session.active_downloads += 1
             session.total_downloads += 1
             logging.info(f"[DOWNLOADER] Usuario {user_id} ahora tiene {session.active_downloads} descargas activas")
             
-            try:
-                # Ejecutar descarga en segundo plano para no bloquear el bucle de eventos
-                logging.info(f"[DOWNLOADER] Iniciando descarga sincrónica para usuario: {user_id}")
-                loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(
-                    None, 
-                    lambda: sync_download_track(url, dz, settings, listener, user_id, collection_temp_dir)
-                )
-                logging.info(f"[DOWNLOADER] Descarga completada para usuario: {user_id}, tiempo: {time.time() - start_time:.2f}s")
-                return result
-            finally:
-                # Decrementar contador al finalizar
-                session.active_downloads -= 1
-                logging.info(f"[DOWNLOADER] Usuario {user_id} ahora tiene {session.active_downloads} descargas activas")
+            # Ejecutar descarga en segundo plano utilizando colas
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None, 
+                lambda: sync_download_track(url, dz, settings, listener, user_id)
+            )
+            logging.info(f"[DOWNLOADER] Descarga completada para usuario: {user_id}, tiempo: {time.time() - start_time:.2f}s")
+            return result
+        finally:
+            # Decrementar contador al finalizar
+            session.active_downloads -= 1
+            logging.info(f"[DOWNLOADER] Usuario {user_id} ahora tiene {session.active_downloads} descargas activas")
     else:
         # Comportamiento original para compatibilidad con código legacy
         logging.info("[DOWNLOADER] Usando método legacy sin user_id")
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None, 
-            lambda: sync_download_track(url, dz, settings, listener, None, collection_temp_dir)
-        )
+        result = await loop.run_in_executor(None, sync_download_track, url, dz, settings, listener)
         logging.info(f"[DOWNLOADER] Descarga legacy completada, tiempo: {time.time() - start_time:.2f}s")
         return result
 
 def sync_download_track(url: str, dz: Deezer, settings: Dict[str, Any], 
-                        listener: LogListener, user_id: Optional[int] = None,
-                        collection_temp_dir: Optional[str] = None) -> Union[str, List[str]]:
+                        listener: LogListener, user_id: Optional[int] = None) -> Union[str, List[str]]:
     """
     Versión sincrónica de la función para descargar contenido de Deezer.
     
@@ -128,7 +111,6 @@ def sync_download_track(url: str, dz: Deezer, settings: Dict[str, Any],
         settings: Diccionario con la configuración de descarga
         listener: Instancia de LogListener para recibir eventos de progreso
         user_id: ID opcional del usuario para identificación de archivos
-        collection_temp_dir: Directorio temporal existente para colecciones (álbum/playlist)
         
     Returns:
         Ruta al archivo descargado o lista de rutas para álbumes/playlists
@@ -139,23 +121,14 @@ def sync_download_track(url: str, dz: Deezer, settings: Dict[str, Any],
     # Asegurar que el directorio base de descargas exista
     os.makedirs(DOWNLOAD_PATH, exist_ok=True)
     
-    # Determinar el directorio temporal a utilizar
-    if collection_temp_dir and os.path.exists(collection_temp_dir):
-        # Si hay un directorio de colección proporcionado, usarlo
-        temp_dir = collection_temp_dir
-        logging.info(f"Usando directorio temporal existente para colección: {temp_dir}")
-        should_cleanup_dir = False  # No eliminaremos este directorio al final
-    else:
-        # Crear un directorio temporal único para evitar conflictos
-        # Si hay user_id, incluirlo en la ruta para separar por usuario
-        folder_name = f"temp_{uuid.uuid4().hex}"
-        if user_id:
-            folder_name = f"user_{user_id}_{folder_name}"
-        
-        temp_dir = os.path.join(DOWNLOAD_PATH, folder_name)
-        os.makedirs(temp_dir, exist_ok=True)
-        logging.info(f"Creado nuevo directorio temporal: {temp_dir}")
-        should_cleanup_dir = True  # Eliminaremos este directorio al final si no es compartido
+    # Crear un directorio temporal único para evitar conflictos
+    # Si hay user_id, incluirlo en la ruta para separar por usuario
+    folder_name = f"temp_{uuid.uuid4().hex}"
+    if user_id:
+        folder_name = f"user_{user_id}_{folder_name}"
+    
+    temp_dir = os.path.join(DOWNLOAD_PATH, folder_name)
+    os.makedirs(temp_dir, exist_ok=True)
     
     # Guardar settings temporales para esta descarga
     temp_settings = settings.copy()
@@ -164,10 +137,7 @@ def sync_download_track(url: str, dz: Deezer, settings: Dict[str, Any],
     try:
         # Registrar inicio de la descarga
         logging.info(f"Iniciando descarga: {url}" + (f" para usuario {user_id}" if user_id else ""))
-        
-        # Determinar tipo de contenido basado en la URL
-        content_type = get_content_type(url)
-        logging.info(f"Tipo de contenido: {content_type}")
+        logging.info("Tipo de contenido: track")
         
         # Generar objeto de descarga con la configuración de calidad deseada
         bitrate = settings["maxBitrate"]
@@ -246,13 +216,9 @@ def sync_download_track(url: str, dz: Deezer, settings: Dict[str, Any],
         if not audio_files:
             raise Exception("No se pudo descargar la canción")
         
-        # Mover el primer archivo a la carpeta principal si no es parte de una colección
-        # Si es parte de una colección, dejarlo en el directorio temporal compartido
-        target_path = audio_files[0]
-        if not collection_temp_dir:
-            target_path = os.path.join(DOWNLOAD_PATH, os.path.basename(audio_files[0]))
-            shutil.move(audio_files[0], target_path)
-        
+        # Mover el primer archivo a la carpeta principal
+        target_path = os.path.join(DOWNLOAD_PATH, os.path.basename(audio_files[0]))
+        shutil.move(audio_files[0], target_path)
         return target_path
     
     except TrackPreviewUnavailableError as e:
@@ -272,19 +238,18 @@ def sync_download_track(url: str, dz: Deezer, settings: Dict[str, Any],
         raise
     
     finally:
-        # Limpiar directorio temporal solo si no es un directorio compartido para colección
-        # y si está marcado para limpieza
-        if should_cleanup_dir and not collection_temp_dir and os.path.exists(temp_dir):
-            logging.info(f"Limpiando directorio temporal: {temp_dir}")
-            try:
+        # Limpiar el directorio temporal independientemente del resultado
+        try:
+            if os.path.exists(temp_dir):
+                logging.info(f"Limpiando directorio temporal: {temp_dir}")
                 shutil.rmtree(temp_dir, ignore_errors=True)
-            except Exception as e:
-                logging.error(f"Error al limpiar directorio temporal: {str(e)}")
+        except Exception as cleanup_error:
+            logging.error(f"Error al limpiar directorio temporal: {str(cleanup_error)}")
 
 async def enqueue_download(user_id: int, process_func: Callable[..., Awaitable[Any]], 
                         *args: Any, **kwargs: Any) -> bool:
     """
-    Encola una tarea de descarga en la sesión del usuario para procesamiento asíncrono.
+    Encola una tarea de descarga en la cola del usuario para procesamiento asíncrono.
     
     Este método es crucial para permitir que el bot responda a otros usuarios mientras
     procesa descargas largas. Evita bloquear el bucle principal de eventos.
@@ -298,25 +263,52 @@ async def enqueue_download(user_id: int, process_func: Callable[..., Awaitable[A
         bool: True si se encoló correctamente, False en caso de error
     """
     try:
-        # Obtener la sesión del usuario
+        # Obtener la sesión del usuario para estadísticas
         session = UserSession.get_session(user_id)
-        
-        # Registrar la actividad del usuario
         session.update_activity()
         
         # Verificar si el usuario tiene demasiadas descargas activas
         if session.active_downloads >= MAX_CONCURRENT_DOWNLOADS_PER_USER:
             logging.warning(f"Usuario {user_id} ha alcanzado el límite de descargas concurrentes")
             return False
+            
+        # Verificar límite mensual para usuarios normales
+        if session.role == "normal":
+            # Verificar si cambió el mes y reiniciar contador si es necesario
+            session._check_monthly_limit_reset()
+            
+            # Obtener información mensual
+            monthly_stats = session.get_monthly_downloads_left()
+            remaining = monthly_stats['remaining']
+            
+            # Rechazar la descarga si se alcanzó el límite mensual
+            if remaining <= 0:
+                logging.warning(f"Usuario {user_id} ha alcanzado el límite mensual de descargas ({monthly_stats['limit']})")
+                # Hacer que el update.message pueda manejar este error específico
+                if 'update' in kwargs and hasattr(kwargs['update'], 'message'):
+                    await kwargs['update'].message.reply_text(
+                        f"⛔ Has alcanzado el límite de {monthly_stats['limit']} descargas mensuales.\n"
+                        f"Considera donar para mantener el servicio y obtener beneficios adicionales."
+                    )
+                return False
         
-        # Añadir la tarea a la cola del usuario
-        # Esta llamada no bloqueará ya que solo encola la tarea
-        await session.add_download_task(process_func, *args, **kwargs)
+        # Obtener el gestor de colas
+        queue_manager = QueueManager.get_instance()
         
-        # Logging para seguimiento
-        logging.info(f"Tarea encolada para usuario {user_id}, descargas activas: {session.active_downloads}")
+        # Añadir la tarea a la cola del usuario a través del gestor de colas
+        task = await queue_manager.enqueue_user_task(
+            user_id=user_id,
+            task_func=process_func,
+            queue_type="downloads",
+            **kwargs
+        )
         
-        return True
+        if task:
+            logging.info(f"Tarea encolada para usuario {user_id}, descargas activas: {session.active_downloads}")
+            return True
+        else:
+            logging.error(f"No se pudo encolar la tarea para usuario {user_id}")
+            return False
         
     except Exception as e:
         logging.error(f"Error añadiendo descarga a la cola para usuario {user_id}: {str(e)}", exc_info=True)
@@ -334,10 +326,23 @@ async def get_user_stats(user_id: int) -> Dict[str, Any]:
         - active_downloads: Número de descargas actualmente en proceso
         - total_downloads: Número total de descargas realizadas
         - last_activity: Timestamp de la última actividad del usuario
+        - queue_stats: Estadísticas de la cola de descargas del usuario
     """
+    # Obtener estadísticas básicas de la sesión
     session = UserSession.get_session(user_id)
-    return {
+    stats = {
         'active_downloads': session.active_downloads,
         'total_downloads': session.total_downloads,
         'last_activity': session.last_activity
     }
+    
+    # Añadir estadísticas de la cola si está disponible
+    try:
+        queue_manager = QueueManager.get_instance()
+        user_queue = queue_manager.get_user_queue(user_id, "downloads")
+        stats['queue_stats'] = user_queue.get_stats()
+    except Exception as e:
+        logging.error(f"Error obteniendo estadísticas de cola para usuario {user_id}: {str(e)}")
+        stats['queue_stats'] = {"error": "No se pudieron obtener estadísticas de cola"}
+    
+    return stats

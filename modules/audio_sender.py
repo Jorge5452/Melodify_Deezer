@@ -3,6 +3,17 @@ import os
 import requests
 from io import BytesIO
 from vault import add_to_vault
+from config import (
+    HTTP_CONNECT_TIMEOUT, 
+    HTTP_READ_TIMEOUT, 
+    HTTP_WRITE_TIMEOUT,
+    MAX_RETRIES,
+    INITIAL_RETRY_DELAY,
+    RETRY_BACKOFF_FACTOR
+)
+from modules.utils import retry_async_operation
+from telegram.request import HTTPXRequest
+from telegram.error import TimedOut, NetworkError
 
 async def send_and_save_audio(context, chat_id, file_path, caption, vault_chat_id, key, dz=None, track_id=None, send_to_user=False):
     """
@@ -70,7 +81,7 @@ async def send_and_save_audio(context, chat_id, file_path, caption, vault_chat_i
                 if not title:
                     title = filename_no_ext
         
-        # Enviar al canal de vault con metadatos
+        # Enviar al canal de vault con metadatos y sistema de reintentos
         with open(file_path, "rb") as f:
             # Preparar argumentos para send_audio
             send_kwargs = {
@@ -85,17 +96,43 @@ async def send_and_save_audio(context, chat_id, file_path, caption, vault_chat_i
             if duration:
                 send_kwargs["duration"] = duration
                 
-            # Añadir miniatura si está disponible (usando el nombre correcto del parámetro)
+            # Añadir miniatura si está disponible
             if thumbnail:
                 send_kwargs["thumbnail"] = thumbnail
                 
-            sent_message = await context.bot.send_audio(**send_kwargs)
-            
+            # Usar la función de reintento para enviar el audio
+            try:
+                sent_message = await retry_async_operation(
+                    context.bot.send_audio,
+                    max_retries=MAX_RETRIES,
+                    initial_delay=INITIAL_RETRY_DELAY,
+                    backoff_factor=RETRY_BACKOFF_FACTOR,
+                    **send_kwargs
+                )
+            except (TimedOut, NetworkError) as e:
+                logging.error(f"Error después de {MAX_RETRIES+1} intentos al enviar audio: {str(e)}")
+                # Intentar una última vez con un archivo más simple (sin metadatos ni miniatura)
+                logging.info("Intentando envío simplificado sin metadatos...")
+                simple_kwargs = {
+                    "chat_id": vault_chat_id,
+                    "audio": f,
+                    "caption": caption
+                }
+                sent_message = await retry_async_operation(
+                    context.bot.send_audio,
+                    max_retries=1,
+                    **simple_kwargs
+                )
+        
         file_id = sent_message.audio.file_id
         
         # Enviar al usuario solo si se solicita explícitamente
         if send_to_user and chat_id != vault_chat_id:
-            await context.bot.send_audio(
+            await retry_async_operation(
+                context.bot.send_audio,
+                max_retries=MAX_RETRIES,
+                initial_delay=INITIAL_RETRY_DELAY,
+                backoff_factor=RETRY_BACKOFF_FACTOR,
                 chat_id=chat_id,
                 audio=file_id
             )

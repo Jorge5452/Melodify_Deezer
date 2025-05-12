@@ -7,16 +7,14 @@ from deemix.settings import load, save
 from config import TrackFormats
 from vault import load_vault
 from user_session import UserSession
+from modules.decorators import with_user_session, with_error_handling, combined_decorator
+from modules.queue_manager import QueueManager
 
+@with_user_session
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Maneja el comando /start del bot.
     """
-    # Obtener datos del usuario para mantener un seguimiento adecuado
-    user_id = update.effective_user.id
-    session = UserSession.get_session(user_id)
-    session.update_activity()
-    
     help_text = (
         "👋 *¡Hola! Soy MelodifyDeluxe*\n\n"
         "Puedo descargar tu música favorita de Deezer. Simplemente:\n"
@@ -27,15 +25,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
+@with_user_session
 async def configuracion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Maneja el comando /config para modificar la configuración de calidad de audio.
     """
-    # Obtener datos del usuario para mantener un seguimiento adecuado
-    user_id = update.effective_user.id
-    session = UserSession.get_session(user_id)
-    session.update_activity()
-    
     # Cargar configuración actual
     settings = load()
     # Obtener calidad actual
@@ -66,6 +60,8 @@ async def configuracion(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         parse_mode="Markdown"
     )
 
+@with_user_session
+@with_error_handling
 async def config_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Procesa la selección de calidad de audio desde el teclado inline.
@@ -73,10 +69,7 @@ async def config_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     query = update.callback_query
     await query.answer()
     
-    # Obtener datos del usuario para mantener un seguimiento adecuado
-    user_id = query.from_user.id
-    session = UserSession.get_session(user_id)
-    session.update_activity()
+    session = context.user_data.get('session')
     
     # Obtener el valor de calidad seleccionado
     try:
@@ -92,7 +85,8 @@ async def config_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     settings["maxBitrate"] = new_bitrate
     
     # También actualizar en la sesión del usuario
-    session.update_setting("maxBitrate", new_bitrate)
+    if session:
+        session.update_setting("maxBitrate", new_bitrate)
     
     # Guardar configuración
     save(settings)
@@ -113,21 +107,32 @@ async def config_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         parse_mode="Markdown"
     )
 
+@combined_decorator
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Muestra estadísticas del bot: usuarios activos, caché, etc.
     """
-    # Obtener datos del usuario para mantener un seguimiento adecuado
+    session = context.user_data.get('session')
     user_id = update.effective_user.id
-    session = UserSession.get_session(user_id)
-    session.update_activity()
     
     # Estadísticas de usuarios
     active_sessions = UserSession.get_active_sessions_count()
     
     # Estadísticas del usuario actual
-    user_downloads = session.total_downloads
-    active_downloads = session.active_downloads
+    user_downloads = session.total_downloads if session else 0
+    active_downloads = session.active_downloads if session else 0
+    
+    # Obtener información de descargas mensuales para usuarios normales
+    monthly_stats = session.get_monthly_downloads_left() if session else {"limit": 0, "used": 0, "remaining": 0}
+    user_role = session.get_role() if session else "normal"
+    
+    # Obtener estadísticas de colas
+    queue_manager = QueueManager.get_instance()
+    queue_stats = queue_manager.get_stats()
+    
+    # Obtener estadísticas de cola del usuario
+    user_queue = queue_manager.get_user_queue(user_id, "downloads")
+    user_queue_stats = user_queue.get_stats()
     
     # Estadísticas de caché
     vault_data = load_vault()
@@ -149,13 +154,49 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Convertir bytes a MB
     download_dir_size_mb = round(download_dir_size / (1024 * 1024), 2)
     
-    await update.message.reply_text(
+    # Crear mensaje de estadísticas con formato mejorado
+    stats_message = (
         f"📊 *Estadísticas del Bot*\n\n"
-        f"👥 Usuarios activos: {active_sessions}\n"
-        f"🔄 Tus descargas activas: {active_downloads}\n"
-        f"📥 Total de tus descargas: {user_downloads}\n\n"
-        f"🗃️ Canciones en caché: {cache_size}\n"
-        f"💾 Archivos temporales: {download_files}\n"
-        f"📁 Espacio utilizado: {download_dir_size_mb} MB\n",
-        parse_mode="Markdown"
+        f"*👥 Usuarios:*\n"
+        f"  • Activos: {active_sessions}\n"
+        f"  • Total en cola: {queue_stats['active_users']}\n\n"
+        
+        f"*🔄 Tu actividad:*\n"
+        f"  • Descargas activas: {active_downloads}\n"
+        f"  • Total histórico: {user_downloads}\n"
+        f"  • En cola: {user_queue_stats['pending_tasks']}\n"
     )
+    
+    # Añadir información de descargas mensuales para usuarios normales
+    if user_role == "normal":
+        stats_message += (
+            f"  • Rol: 👤 Normal\n"
+            f"  • Descargas mensuales: {monthly_stats['used']}/{monthly_stats['limit']}\n"
+            f"  • Restantes este mes: {monthly_stats['remaining']}\n\n"
+        )
+    elif user_role == "premium":
+        stats_message += (
+            f"  • Rol: 💎 Premium\n"
+            f"  • Descargas mensuales: Ilimitadas ♾️\n\n"
+        )
+    elif user_role == "admin":
+        stats_message += (
+            f"  • Rol: 👑 Admin\n"
+            f"  • Descargas mensuales: Ilimitadas ♾️\n\n"
+        )
+    else:
+        stats_message += "\n"
+    
+    stats_message += (
+        f"*⚙️ Sistema:*\n"
+        f"  • Tareas globales pendientes: {queue_stats['total_pending']}\n"
+        f"  • Tareas procesadas: {queue_stats['total_processed']}\n"
+        f"  • Tareas fallidas: {queue_stats['total_failed']}\n\n"
+        
+        f"*🗃️ Almacenamiento:*\n"
+        f"  • Canciones en caché: {cache_size}\n"
+        f"  • Archivos temporales: {download_files}\n"
+        f"  • Espacio utilizado: {download_dir_size_mb} MB\n"
+    )
+    
+    await update.message.reply_text(stats_message, parse_mode="Markdown")

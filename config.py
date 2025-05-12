@@ -74,7 +74,7 @@ SESSION_CLEANUP_INTERVAL: int = 600
 
 # ----- LOGGING -----
 # Nivel de detalle para los logs (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-LOG_LEVEL: str = "INFO"
+LOG_LEVEL: str = "WARNING"
 # Formato para los mensajes de log
 LOG_FORMAT: str = "%(asctime)s - %(levelname)s - %(message)s"
 
@@ -84,3 +84,15 @@ LOG_FORMAT: str = "%(asctime)s - %(levelname)s - %(message)s"
 VAULT_JSON = "vault_data.json"
 VAULT_BACKUP = "vault_data.backup.json"
 MAX_VAULT_ENTRIES = 1000  # Límite máximo de entradas en el vault
+
+# Configuración de timeouts para HTTP y Telegram
+# Valores predeterminados más generosos para operaciones que implican
+# archivos grandes como subidas de audio
+HTTP_CONNECT_TIMEOUT = float(os.getenv("HTTP_CONNECT_TIMEOUT", "20.0"))  # 20 segundos
+HTTP_READ_TIMEOUT = float(os.getenv("HTTP_READ_TIMEOUT", "300.0"))       # 5 minutos
+HTTP_WRITE_TIMEOUT = float(os.getenv("HTTP_WRITE_TIMEOUT", "300.0"))     # 5 minutos
+
+# Configuración de reintentos
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
+INITIAL_RETRY_DELAY = float(os.getenv("INITIAL_RETRY_DELAY", "2.0"))
+RETRY_BACKOFF_FACTOR = float(os.getenv("RETRY_BACKOFF_FACTOR", "2.0"))
