@@ -7,12 +7,18 @@ como opciones avanzadas de descarga, prioridad en cola, y más.
 
 import logging
 import time
-from typing import Dict, Any, Optional, List
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 
 from user_session import UserSession, requires_role
+
+# Definiciones globales para el módulo
+quality_options = {
+    "FLAC": "FLAC (Lossless)",
+    "MP3_320": "MP3 320kbps",
+    "MP3_128": "MP3 128kbps"
+}
 
 async def premium_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
@@ -122,14 +128,6 @@ async def premium_audio_options(update: Update, context: ContextTypes.DEFAULT_TY
     # Obtener configuración actual
     settings = session.settings
     current_format = settings.get("downloadQuality", "MP3_320")
-    current_folder_format = settings.get("albumNameTemplate", "%artist%/%album%")
-    
-    # Opciones disponibles para premium
-    quality_options = {
-        "FLAC": "FLAC (Lossless)",
-        "MP3_320": "MP3 320kbps",
-        "MP3_128": "MP3 128kbps"
-    }
     
     # Crear botones para las opciones
     keyboard = []
@@ -224,13 +222,6 @@ async def handle_premium_callback(update: Update, context: ContextTypes.DEFAULT_
             f"Tus descargas se organizarán según el nuevo formato."
         )
 
-# Definiciones globales para el módulo
-quality_options = {
-    "FLAC": "FLAC (Lossless)",
-    "MP3_320": "MP3 320kbps",
-    "MP3_128": "MP3 128kbps"
-}
-
 async def process_download_queue(session: UserSession) -> None:
     """
     Procesa la cola de descargas con prioridad para usuarios premium.
@@ -245,5 +236,4 @@ async def process_download_queue(session: UserSession) -> None:
     # que reorganice las colas para dar preferencia a los usuarios premium
     
     # Por ahora simplemente registramos la solicitud
-    logging.info(f"Usuario {session.user_id} (rol: {session.role}) procesando cola de descargas")
-    pass 
+    logging.info(f"Usuario {session.user_id} (rol: {session.get_role()}) procesando cola de descargas") 

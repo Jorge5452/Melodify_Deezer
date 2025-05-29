@@ -9,6 +9,7 @@ sobrecargas.
 import asyncio
 import time
 import logging
+from collections import OrderedDict
 from typing import Dict, Any, Optional, Callable, Awaitable, List, Union, Tuple
 from deemix.settings import load as load_settings
 from config import (
@@ -17,7 +18,14 @@ from config import (
     MAX_CONCURRENT_DOWNLOADS_PER_USER,
     MAX_CONCURRENT_DOWNLOADS_GLOBAL,
     SESSION_TIMEOUT,
-    SESSION_CLEANUP_INTERVAL
+    SESSION_CLEANUP_INTERVAL,
+    SESSION_CACHE_SIZE,
+    SESSION_TIERS,
+    COMPRESSION_THRESHOLD,
+    DB_BATCH_SIZE,
+    DB_FLUSH_INTERVAL,
+    MONTHLY_DOWNLOAD_LIMIT,
+    ROLES_HIERARCHY
 )
 
 # Verificar si db_manager está disponible
@@ -41,6 +49,79 @@ MONTHLY_DOWNLOAD_LIMIT = 450
 
 # Roles en orden ascendente de privilegios
 ROLES_HIERARCHY = ["normal", "premium", "admin"]
+
+class SessionMetrics:
+    """Métricas para el sistema de gestión de sesiones"""
+    
+    def __init__(self):
+        # Métricas de caché
+        self.cache_hits = 0
+        self.cache_misses = 0
+        # Métricas de BD
+        self.db_reads = 0
+        self.db_writes = 0 
+        self.db_errors = 0
+        # Métricas de compresión
+        self.compression_count = 0
+        self.uncompressed_size = 0
+        self.compressed_size = 0
+        # Reset periódico
+        self.last_reset = time.time()
+    
+    def log_cache_hit(self):
+        self.cache_hits += 1
+    
+    def log_cache_miss(self):
+        self.cache_misses += 1
+        
+    def log_db_read(self):
+        self.db_reads += 1
+        
+    def log_db_write(self):
+        self.db_writes += 1
+    
+    def log_compression(self, before_size, after_size):
+        self.compression_count += 1
+        self.uncompressed_size += before_size
+        self.compressed_size += after_size
+        
+    def get_compression_ratio(self):
+        if self.compressed_size == 0 or self.uncompressed_size == 0:
+            return 1.0
+        return self.uncompressed_size / self.compressed_size
+        
+    def get_cache_hit_ratio(self):
+        total = self.cache_hits + self.cache_misses
+        if total == 0:
+            return 0
+        return self.cache_hits / total
+
+class LRUCache(OrderedDict):
+    """Caché con política de desalojo LRU (Least Recently Used)"""
+    
+    def __init__(self, maxsize=SESSION_CACHE_SIZE):
+        super().__init__()
+        self.maxsize = maxsize
+        
+    def get(self, key):
+        """Obtiene un valor y actualiza su posición en la caché"""
+        if key not in self:
+            return None
+        self.move_to_end(key)
+        return self[key]
+        
+    def put(self, key, value):
+        """Inserta/actualiza un valor y mantiene el límite de tamaño"""
+        if key in self:
+            self.move_to_end(key)
+        self[key] = value
+        if len(self) > self.maxsize:
+            oldest = next(iter(self))
+            del self[oldest]
+            
+    def keys_ordered(self):
+        """Devuelve las claves ordenadas por uso (más reciente al final)"""
+        return list(self.keys())
 
 class RateLimiter:
     """
@@ -217,12 +298,14 @@ class UserSession:
     y control de tasas para cada usuario del bot.
     """
     
-    # Almacenamiento estático compartido para todas las sesiones
-    _sessions: Dict[int, "UserSession"] = {}
+    # Reemplazar diccionario estático por caché LRU
+    _sessions = LRUCache(maxsize=SESSION_CACHE_SIZE)
     # Semáforo global para limitar las descargas concurrentes en todo el sistema
     _global_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS_GLOBAL)
     # Control de persistencia en BD
     _use_database: bool = False
+    # Métricas del sistema de gestión de sesiones
+    _metrics = SessionMetrics()
     
     @classmethod
     def enable_persistence(cls, enable: bool = True) -> None:
@@ -243,7 +326,7 @@ class UserSession:
     def get_session(cls, user_id: int) -> "UserSession":
         """
         Obtiene la sesión de un usuario, creándola si no existe.
-        Si la persistencia está activada, intenta cargarla de la BD.
+        Implementa carga diferida desde la BD cuando es necesario.
         
         Args:
             user_id: ID del usuario de Telegram
@@ -251,48 +334,47 @@ class UserSession:
         Returns:
             Instancia de UserSession para el usuario específico
         """
-        # Verificar si ya existe en memoria
-        if user_id not in cls._sessions:
-            # Si persistencia activada, intentar cargar desde BD
-            if cls._use_database:
-                try:
-                    session_data = db_manager.load_user_session(user_id)
-                    
-                    if session_data:
-                        # Crear sesión con datos de BD
-                        session = cls(user_id)
-                        session.settings = session_data["settings"]
-                        session.last_activity = session_data["last_activity"]
-                        session.context_data = session_data["context_data"]
-                        session.total_downloads = session_data["total_downloads"]
-                        session.active_downloads = session_data["active_downloads"]
-                        session.role = session_data.get("role", "normal")
-                        # Campos adicionales para tracking
-                        session.created_at = session_data["created_at"]
-                        session.updated_at = session_data["updated_at"]
-                        
-                        # Actualizar límites basados en rol
-                        limit = ROLE_DOWNLOAD_LIMITS.get(session.role, ROLE_DOWNLOAD_LIMITS["normal"])
-                        session.download_queue.update_concurrency_limit(limit)
-                        
-                        cls._sessions[user_id] = session
-                        return session
-                except Exception as e:
-                    logging.error(f"Error cargando sesión {user_id} desde BD: {e}", 
-                                 exc_info=True)
-            
-            # Si no está en BD o falló la carga, crear nueva
-            cls._sessions[user_id] = UserSession(user_id)
+        # Buscar en caché primero
+        session = cls._sessions.get(user_id)
+        if session:
+            # Registrar hit en caché y devolver la sesión
+            cls._metrics.log_cache_hit()
+            return session
+
+        # Si no está en caché, registrar miss
+        cls._metrics.log_cache_miss()
         
-        return cls._sessions[user_id]
+        # Si persistencia activada, intentar cargar desde BD
+        if cls._use_database:
+            try:
+                # Registrar lectura de BD
+                cls._metrics.log_db_read()
+                
+                # Cargar desde BD
+                session_data = db_manager.load_user_session(user_id)
+                
+                if session_data:
+                    # Crear sesión con datos de BD usando el método de creación
+                    session = cls._create_session_from_data(user_id, session_data)
+                    cls._sessions.put(user_id, session)
+                    return session
+            except Exception as e:
+                cls._metrics.db_errors += 1
+                logging.error(f"Error cargando sesión {user_id} desde BD: {e}", 
+                             exc_info=True)
+        
+        # Si no está en BD o falló la carga, crear nueva
+        session = UserSession(user_id)
+        cls._sessions.put(user_id, session)
+        return session
     
     @classmethod
     def get_active_sessions_count(cls) -> int:
         """
-        Obtiene el número de sesiones activas en el sistema.
+        Obtiene el número de sesiones activas en memoria.
         
         Returns:
-            Número total de sesiones de usuario activas
+            Número total de sesiones de usuario en la caché
         """
         return len(cls._sessions)
     
@@ -337,7 +419,7 @@ class UserSession:
                     limit = ROLE_DOWNLOAD_LIMITS.get(session.role, ROLE_DOWNLOAD_LIMITS["normal"])
                     session.download_queue.update_concurrency_limit(limit)
                     
-                    cls._sessions[user_id] = session
+                    cls._sessions.put(user_id, session)
                     loaded += 1
             
             logging.info(f"Cargadas {loaded} sesiones desde la base de datos")
@@ -449,16 +531,21 @@ class UserSession:
         if self.__class__._use_database:
             asyncio.create_task(self._save_to_db())
     
-    def is_expired(self, timeout: int = SESSION_TIMEOUT) -> bool:
+    def is_expired(self, timeout: Optional[int] = None) -> bool:
         """
         Verifica si la sesión ha expirado por inactividad.
+        Utiliza diferentes tiempos según el rol del usuario.
         
         Args:
-            timeout: Tiempo en segundos después del cual una sesión se considera inactiva
+            timeout: Tiempo en segundos después del cual una sesión se considera inactiva.
+                    Si es None, se usa el tiempo específico del rol.
             
         Returns:
             True si la sesión ha expirado, False en caso contrario
         """
+        if timeout is None:
+            # Usar tiempo específico según rol
+            timeout = SESSION_TIERS.get(self.role, SESSION_TIMEOUT)
         return time.time() - self.last_activity > timeout
     
     def get_setting(self, key: str, default: Any = None) -> Any:
@@ -587,7 +674,7 @@ class UserSession:
         # Actualizar límites según el nuevo rol
         limit = ROLE_DOWNLOAD_LIMITS.get(new_role, ROLE_DOWNLOAD_LIMITS["normal"])
         self.download_queue.update_concurrency_limit(limit)
-        
+
         # Guardar en BD si está habilitado
         if self.__class__._use_database:
             success = await self._save_to_db()
@@ -609,7 +696,7 @@ class UserSession:
     async def _save_to_db(self) -> bool:
         """
         Guarda la sesión en la base de datos sin bloquear.
-        Solo si la persistencia está habilitada.
+        Registra métricas de escritura en BD.
         
         Returns:
             True si se guardó correctamente, False en caso contrario
@@ -628,8 +715,8 @@ class UserSession:
                 "role": self.role,
                 "created_at": self.created_at,
                 "updated_at": self.updated_at,
-                "monthly_downloads": self.monthly_downloads,
-                "current_month": self.current_month
+                "monthly_downloads": getattr(self, "monthly_downloads", 0),
+                "current_month": getattr(self, "current_month", self._get_current_month())
             }
             
             # Ejecutar en otro thread para no bloquear
@@ -639,15 +726,19 @@ class UserSession:
                 session_data
             )
             
-            # Resetear indicador de cambios pendientes
+            # Registrar escritura en métricas
             if result:
                 self._pending_changes = False
+                self.__class__._metrics.log_db_write()
+            else:
+                self.__class__._metrics.db_errors += 1
                 
             return result
             
         except Exception as e:
             logging.error(f"Error guardando sesión {self.user_id} en BD: {e}", 
                          exc_info=True)
+            self.__class__._metrics.db_errors += 1
             return False
     
     def increment_downloads(self) -> None:
@@ -742,43 +833,45 @@ class UserSession:
 
 async def cleanup_sessions() -> None:
     """
-    Función periódica que limpia las sesiones inactivas y las sincroniza con la BD.
-    
-    Se ejecuta en segundo plano para eliminar las sesiones que han expirado
-    por inactividad, liberando recursos del sistema.
+    Función periódica que limpia sesiones inactivas.
+    Implementa expiración por niveles según rol del usuario.
     """
     while True:
         try:
-            # Esperar el intervalo configurado
+            # Esperar intervalo configurado
             await asyncio.sleep(SESSION_CLEANUP_INTERVAL)
             
             # Contar sesiones antes de limpiar
             active_before = len(UserSession._sessions)
             
-            # Identificar sesiones expiradas
+            # Identificar sesiones expiradas usando los tiempos por nivel
             expired_ids = []
             for user_id, session in list(UserSession._sessions.items()):
+                # Usar is_expired que ahora implementa tiempos por nivel
                 if session.is_expired():
+                    # Si persistencia activada y hay cambios pendientes, guardar última vez
+                    if UserSession._use_database and getattr(session, "_pending_changes", False):
+                        await session._save_to_db()
                     expired_ids.append(user_id)
             
             # Eliminar sesiones expiradas de memoria
             for user_id in expired_ids:
-                # Si persistencia activada y hay cambios pendientes, guardar última vez
-                if UserSession._use_database and UserSession._sessions[user_id]._pending_changes:
-                    session = UserSession._sessions[user_id]
-                    await session._save_to_db()
-                
                 del UserSession._sessions[user_id]
             
             # Eliminar sesiones expiradas de la BD
             deleted_db = 0
             if UserSession._use_database:
-                deleted_db = await asyncio.to_thread(
-                    db_manager.delete_expired_sessions, 
-                    SESSION_TIMEOUT
-                )
+                try:
+                    # Usar nueva función para respetar tiempos por nivel
+                    deleted_db = await asyncio.to_thread(
+                        db_manager.delete_tiered_sessions, 
+                        SESSION_TIERS
+                    )
+                except Exception as e:
+                    UserSession._metrics.db_errors += 1
+                    logging.error(f"Error eliminando sesiones de BD: {e}", exc_info=True)
             
-            # Log de información
+            # Log de información solo si hubo cambios
             if expired_ids or deleted_db > 0:
                 logging.info(
                     f"Limpieza de sesiones: {len(expired_ids)} eliminadas de memoria"
@@ -787,7 +880,7 @@ async def cleanup_sessions() -> None:
                 )
                 
         except Exception as e:
-            logging.error(f"Error en la limpieza de sesiones: {str(e)}", exc_info=True)
+            logging.error(f"Error en la limpieza de sesiones: {e}", exc_info=True)
 
 def requires_role(minimum_role: str):
     """

@@ -282,7 +282,34 @@ async def show_artist_top_tracks(query, context, artist_id):
 
 async def start_album_download(query, context, album_id):
     """Inicia la descarga de un álbum."""
-    await query.edit_message_text("⏳ Iniciando descarga del álbum...")
+    # Importar message_manager aquí para evitar importaciones circulares
+    from modules.message_manager import message_manager
+    
+    # Obtener información del álbum para mostrar más detalles
+    dz = context.bot_data.get('dz')
+    content_type = "álbum"
+    album_info_text = content_type
+    track_count = "varias"
+    
+    try:
+        album_info = dz.api.get_album(album_id)
+        if album_info:
+            album_title = album_info.get('title', 'Álbum sin título')
+            artist_name = album_info.get('artist', {}).get('name', 'Artista desconocido')
+            album_info_text = f"{album_title} - {artist_name}"
+            track_count = album_info.get('nb_tracks', 0)
+    except Exception as e:
+        logging.warning(f"No se pudo obtener información del álbum: {e}")
+    
+    # Crear mensaje de progreso para la descarga
+    progress_msg = await message_manager.send_progress(
+        None,  # No tenemos un update real
+        process_type="collection",
+        initial_status="processing",  # Usar processing que es más apropiado para colecciones
+        content_type=content_type,
+        query=query,  # Pasar el query para editar el mensaje existente
+        track_count=track_count
+    )
     
     # Generar URL de Deezer para el álbum
     album_url = f"https://www.deezer.com/album/{album_id}"
@@ -290,8 +317,14 @@ async def start_album_download(query, context, album_id):
     # Obtener user_id para las estadísticas
     user_id = query.from_user.id
     
-    # Crear objeto Update simulado
-    sim_update = create_simulated_update(query, context, album_url)
+    # Crear objeto Update simulado con el mensaje de progreso
+    sim_update = create_simulated_update(
+        query, 
+        context, 
+        album_url,
+        progress_message=progress_msg,
+        from_search=True  # Indicar que este update viene de una búsqueda
+    )
     
     # Configurar user_id en effective_user que ya existe en el SimulatedUpdate
     sim_update.effective_user.id = user_id
@@ -310,7 +343,31 @@ async def start_album_download(query, context, album_id):
 
 async def start_track_download(query, context, track_id):
     """Inicia la descarga de una canción."""
-    await query.edit_message_text("⏳ Iniciando descarga de la canción...")
+    # Importar message_manager aquí para evitar importaciones circulares
+    from modules.message_manager import message_manager
+    
+    # Obtener información de la pista para mostrar más detalles
+    dz = context.bot_data.get('dz')
+    track_info_text = "canción"
+    try:
+        track_info = dz.api.get_track(track_id)
+        if track_info:
+            track_name = track_info.get('title', 'Canción sin título')
+            artist_name = track_info.get('artist', {}).get('name', 'Artista desconocido')
+            track_info_text = f"{track_name} - {artist_name}"
+    except Exception as e:
+        logging.warning(f"No se pudo obtener información de la pista: {e}")
+        
+    # Crear mensaje de progreso para la descarga en lugar de editar directamente
+    # Usamos directamente el estado "downloading" para evitar la transición innecesaria
+    progress_msg = await message_manager.send_progress(
+        None,  # No tenemos un update real
+        process_type="download",
+        initial_status="downloading",  # Usar "downloading" en lugar de "starting"
+        content_type="canción",
+        query=query,  # Pasar el query para editar el mensaje existente
+        track_info=track_info_text
+    )
     
     # Generar URL de Deezer para la canción
     track_url = f"https://www.deezer.com/track/{track_id}"
@@ -318,8 +375,14 @@ async def start_track_download(query, context, track_id):
     # Obtener user_id para las estadísticas
     user_id = query.from_user.id
     
-    # Crear objeto Update simulado
-    sim_update = create_simulated_update(query, context, track_url)
+    # Crear objeto Update simulado con el mensaje de progreso
+    sim_update = create_simulated_update(
+        query, 
+        context, 
+        track_url,
+        progress_message=progress_msg,
+        from_search=True  # Indicar que este update viene de una búsqueda
+    )
     
     # Configurar user_id en effective_user que ya existe en el SimulatedUpdate
     sim_update.effective_user.id = user_id

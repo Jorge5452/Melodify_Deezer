@@ -95,6 +95,7 @@ class SimulatedUpdate:
     Attributes:
         message (SimulatedMessage): El mensaje simulado
         effective_user (SimulatedUser): El usuario simulado
+        progress_message: Mensaje de progreso preexistente (opcional)
     """
     def __init__(self, chat_id: int, user_id: int, text: str, context: ContextTypes.DEFAULT_TYPE) -> None:
         """
@@ -110,9 +111,13 @@ class SimulatedUpdate:
         self.effective_user = SimulatedUser(user_id)
         # Proporcionar context a SimulatedMessage
         self.message._context = context
+        # Mensaje de progreso (si se está reutilizando un mensaje existente)
+        self.progress_message = None
+        # Flag para indicar si este update viene de un callback de búsqueda
+        self.from_search_callback = False
 
 # Función auxiliar para crear objetos simulados
-def create_simulated_update(query, context, url):
+def create_simulated_update(query, context, url, progress_message=None, from_search=True):
     """
     Crea un objeto Update simulado a partir de un callback query.
     
@@ -120,13 +125,24 @@ def create_simulated_update(query, context, url):
         query: Objeto CallbackQuery de Telegram
         context: Contexto del bot
         url: URL a incluir como texto del mensaje
+        progress_message: Mensaje de progreso existente (opcional)
+        from_search: Indica si el update viene de un callback de búsqueda
     
     Returns:
         Objeto SimulatedUpdate para usar en funciones de manejo de mensajes
     """
     chat_id = query.message.chat_id
     user_id = query.from_user.id
-    return SimulatedUpdate(chat_id, user_id, url, context)
+    update = SimulatedUpdate(chat_id, user_id, url, context)
+    
+    # Si se proporciona un mensaje de progreso, lo asociamos al update
+    if progress_message:
+        update.progress_message = progress_message
+    
+    # Marcar este update como proveniente de una búsqueda
+    update.from_search_callback = from_search
+    
+    return update
 
 # Funciones auxiliares generales
 async def safe_edit_message(message, text, parse_mode=None):

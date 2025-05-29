@@ -10,6 +10,7 @@ from config import BATCH_SIZE
 from modules.audio_sender import send_and_save_audio
 from modules.utils import safe_edit_message, retry_async_operation
 from telegram.error import TimedOut, NetworkError
+from user_session import UserSession
 
 # Definir clases de excepciones personalizadas
 class CollectionProcessingError(Exception):
@@ -28,10 +29,13 @@ class TrackNotAvailableError(TrackDownloadError):
     """Excepción lanzada cuando una pista no está disponible (región, derechos, etc.)."""
     pass
 
-async def process_collection(update, context, url, content_type, content_id, dz, settings, vault_chat_id, listener):
+async def process_collection(update, context, url, content_type, content_id, dz, settings, vault_chat_id, listener, progress_message=None):
     """
     Procesa la descarga de un álbum o playlist.
     """
+    user_id = update.effective_user.id
+    session = UserSession.get_session(user_id)
+    
     cache_key = f"{content_type}_{content_id}"
     # Verificar si existe el álbum/playlist completo en caché, pero solo usarlo 
     # completamente para tipos de contenido que no sean ni playlist ni álbum
@@ -41,10 +45,18 @@ async def process_collection(update, context, url, content_type, content_id, dz,
     if content_type != "playlist" and content_type != "album" and cached_data and isinstance(cached_data, list):
         for file_id in cached_data:
             await update.message.reply_audio(audio=file_id)
+        # Since we're finishing early, decrement the active downloads counter
+        session.active_downloads = max(0, session.active_downloads - 1)
+        session.mark_as_changed()
         return
     
-    # Notificar inicio de descarga
-    status_message = await update.message.reply_text(f"⏳ Buscando {content_type}...")
+    # Use provided progress message if available
+    status_message = None
+    if progress_message:
+        status_message = progress_message.message
+    else:
+        # Notificar inicio de descarga
+        status_message = await update.message.reply_text(f"⏳ Buscando {content_type}...")
     
     try:
         # Obtener información del álbum/playlist
@@ -97,6 +109,11 @@ async def process_collection(update, context, url, content_type, content_id, dz,
     except Exception as e:
         logging.error(f"Error al procesar {content_type}: {str(e)}", exc_info=True)
         await status_message.edit_text(f"❌ No pude procesar este {content_type}")
+    finally:
+        # Decrement the active downloads counter when we're done with the collection
+        # regardless of success or failure
+        session.active_downloads = max(0, session.active_downloads - 1)
+        session.mark_as_changed()
 
 async def process_playlist_in_batches(update, context, track_urls, track_ids, track_titles, 
                                      dz, settings, listener, vault_chat_id, 

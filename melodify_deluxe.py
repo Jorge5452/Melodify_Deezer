@@ -46,40 +46,36 @@ from modules.decorators import with_error_handling
 from modules.queue_manager import QueueManager
 from downloader import LogListener
 
+# Nuevo módulo para gestión centralizada de logs
+from modules.log_manager import initialize_logging, silence_http_logs, silence_telegram_logs
+
 # Nuevos módulos para sistema de roles
 from modules.admin_commands import (
     admin_help, cmd_set_role, set_role_user_id, set_role_confirm, 
     cancel_conversation, cmd_user_info, admin_stats, handle_admin_callback, 
     cmd_maintenance, cmd_broadcast, broadcast_confirm, cmd_system,
-    WAITING_FOR_USER_ID, WAITING_FOR_ROLE
+    cmd_session_stats, WAITING_FOR_USER_ID, WAITING_FOR_ROLE
 )
 from modules.premium_commands import (
     premium_help, premium_stats, premium_audio_options, 
     handle_premium_callback
 )
 
-# Configuración del sistema de logging
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL),
-    format=LOG_FORMAT
+# Inicializar el sistema de logging usando el nuevo módulo centralizado
+initialize_logging(
+    log_level=LOG_LEVEL,
+    log_file="melodify.log",
+    enable_console=True,
+    preset="production"
 )
 
-# Reducir verbosidad de logs de bibliotecas externas
-logging.getLogger("telegram").setLevel(logging.WARNING)
+# Silenciar loggers específicos que producen mucho ruido
+silence_http_logs()  # Silenciar logs de HTTP y conexiones
+silence_telegram_logs()  # Silenciar logs de Telegram API
+
+# Configurar niveles específicos adicionales
 logging.getLogger("deemix").setLevel(logging.INFO)
-logging.getLogger("httpx").setLevel(logging.WARNING)  # Silenciar logs de httpx (usado por python-telegram-bot)
-logging.getLogger("telegram.ext.Application").setLevel(logging.ERROR)  # Silenciar logs de Application
-logging.getLogger("telegram.ext").setLevel(logging.WARNING)  # Silenciar logs generales de telegram.ext
-
-# Desactivar completamente los logs HTTP
-logging.getLogger("httpcore").setLevel(logging.ERROR)
-logging.getLogger("httpcore.http11").setLevel(logging.ERROR)
-logging.getLogger("httpcore.connection").setLevel(logging.ERROR)
-logging.getLogger("httpcore.http").setLevel(logging.ERROR)
-
-# Desactivar logs específicos de solicitudes a la API de Telegram
-logging.getLogger("telegram.request").setLevel(logging.ERROR)
-logging.getLogger("telegram.Bot").setLevel(logging.ERROR)
+logging.getLogger('modules.message_manager').setLevel(logging.DEBUG)
 
 async def error_handler(update: Optional[Any], context: Any) -> None:
     """
@@ -171,12 +167,15 @@ async def shutdown(app: Application) -> None:
     
     logging.info("Apagado completo. ¡Hasta pronto!")
 
-async def main() -> None:
+async def main() -> Application:
     """
     Función principal que inicializa y ejecuta el bot.
     
     Configura la conexión con Deezer, inicializa el bot de Telegram,
     registra los handlers y mantiene el bot en ejecución.
+    
+    Returns:
+        Application: La instancia de la aplicación de Telegram
     """
     try:
         logging.info("Iniciando el bot...")
@@ -204,8 +203,26 @@ async def main() -> None:
         if db_initialized:
             from user_session import UserSession
             UserSession.enable_persistence(True)
-            UserSession.load_all_sessions_from_db()
-            logging.info("Persistencia de sesiones activada")
+            # Ya no cargamos todas las sesiones al inicio - Carga diferida
+            logging.info("Persistencia de sesiones activada con carga diferida")
+            
+            # Configurar tamaño de caché según recursos disponibles
+            try:
+                import psutil
+                available_memory = psutil.virtual_memory().available / (1024 * 1024)  # En MB
+                if available_memory > 1024:  # Más de 1GB
+                    # En sistemas con más memoria, permitir más sesiones en memoria
+                    UserSession._sessions.maxsize = 200
+                    logging.info(f"Tamaño de caché ajustado a 200 sesiones (RAM disponible: {available_memory:.0f}MB)")
+                elif available_memory < 512:  # Menos de 512MB
+                    # En sistemas con poca memoria, reducir la cantidad de sesiones
+                    UserSession._sessions.maxsize = 50
+                    logging.info(f"Tamaño de caché reducido a 50 sesiones (RAM disponible: {available_memory:.0f}MB)")
+                else:
+                    # En sistemas intermedios, mantener el valor predeterminado
+                    logging.info(f"Tamaño de caché mantenido en {UserSession._sessions.maxsize} sesiones")
+            except ImportError:
+                logging.info("No se pudo importar psutil. Usando tamaño de caché predeterminado")
         
         # Crear directorio de descargas
         logging.info(f"Creando directorio de descargas: {DOWNLOAD_PATH}")
@@ -272,6 +289,7 @@ async def main() -> None:
         app.add_handler(CommandHandler("maintenance", cmd_maintenance))
         app.add_handler(CommandHandler("userinfo", cmd_user_info))
         app.add_handler(CommandHandler("system", requires_role("admin")(cmd_system)))
+        app.add_handler(CommandHandler("session_stats", requires_role("admin")(cmd_session_stats)))
         app.add_handler(CallbackQueryHandler(handle_admin_callback, pattern="^admin_"))
         
         # Handler para el comando broadcast (en dos pasos)
@@ -312,8 +330,8 @@ async def main() -> None:
         logging.info("Bot iniciado y listo para recibir mensajes")
         logging.info(f"Directorio de descargas: {os.path.abspath(DOWNLOAD_PATH)}")
         
-        # Mantener el bot en ejecución indefinidamente
-        await asyncio.Event().wait()
+        # Devolver la instancia de la aplicación para poder acceder a ella desde el manejador de señales
+        return app
         
     except Exception as e:
         logging.critical(f"Error crítico: {str(e)}", exc_info=True)
@@ -333,4 +351,62 @@ async def main() -> None:
             logging.error(f"Error guardando sesiones: {save_error}")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Configurar manejo de señales para cierre controlado
+    try:
+        import platform
+        loop = asyncio.get_event_loop()
+        app = None  # Variable para almacenar la aplicación
+        
+        # Definir handler que se ejecutará cuando se reciba una señal de terminación
+        async def signal_handler():
+            if app:
+                logging.info("Señal de terminación recibida, iniciando apagado controlado...")
+                await shutdown(app)
+                loop.stop()
+        
+        # Registrar manejadores de señales de forma compatible con cada plataforma
+        if platform.system() == "Windows":
+            # En Windows, usar eventos de control de consola
+            try:
+                import win32api
+                
+                def win_handler(ctrl_type):
+                    if ctrl_type in (0, 2):  # CTRL_C_EVENT o CTRL_BREAK_EVENT
+                        logging.info("Evento de control detectado en Windows")
+                        asyncio.create_task(signal_handler())
+                        return True  # No propagar el evento
+                    return False
+                    
+                win32api.SetConsoleCtrlHandler(win_handler, True)
+                logging.info("Manejador de eventos de control de Windows registrado")
+            except ImportError:
+                logging.warning("No se pudo importar win32api. El cierre controlado podría no funcionar en Windows.")
+                # Fallar silenciosamente y continuar
+        else:
+            # En Linux/Unix, usar señales estándar
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(sig, lambda: asyncio.create_task(signal_handler()))
+            logging.info("Manejadores de señales POSIX registrados")
+            
+        # Ejecutar el bot y guardar la referencia a la aplicación para manejo de señales
+        async def run_bot():
+            global app
+            app = await main()
+            # Mantener la aplicación en ejecución hasta que se reciba una señal
+            await asyncio.Event().wait()
+            
+        asyncio.run(run_bot())
+    except KeyboardInterrupt:
+        logging.info("Interrupción de teclado detectada, cerrando...")
+    except Exception as e:
+        logging.critical(f"Error fatal: {str(e)}", exc_info=True)
+        # Intentar un cierre limpio si es posible
+        if 'app' in locals() and app:
+            try:
+                loop = asyncio.get_event_loop()
+                loop.run_until_complete(shutdown(app))
+            except Exception as shutdown_error:
+                logging.error(f"Error durante el cierre: {str(shutdown_error)}")
+else:
+    # Comportamiento para importación como módulo
+    pass

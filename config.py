@@ -72,6 +72,26 @@ SESSION_TIMEOUT: int = 3600
 # Intervalo en segundos para ejecutar la limpieza de sesiones inactivas (10 minutos)
 SESSION_CLEANUP_INTERVAL: int = 600
 
+# ----- GESTIÓN DE SESIONES -----
+# Máximo número de sesiones mantenidas en memoria
+SESSION_CACHE_SIZE: int = 100
+# Tiempos de expiración por rol (segundos)
+SESSION_TIERS: Dict[str, int] = {
+    "admin": 86400,     # 24 horas para administradores
+    "premium": 43200,   # 12 horas para usuarios premium
+    "normal": 3600      # 1 hora para usuarios normales
+}
+# Tamaño en bytes para activar compresión de datos
+COMPRESSION_THRESHOLD: int = 1024
+# Número de operaciones de BD antes de realizar flush
+DB_BATCH_SIZE: int = 10
+# Tiempo entre flushes de BD (segundos)
+DB_FLUSH_INTERVAL: int = 5
+# Límite mensual de descargas para usuarios normales
+MONTHLY_DOWNLOAD_LIMIT: int = 50
+# Lista ordenada de roles por jerarquía (menor a mayor nivel)
+ROLES_HIERARCHY: List[str] = ["normal", "premium", "admin"]
+
 # ----- LOGGING -----
 # Nivel de detalle para los logs (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 LOG_LEVEL: str = "WARNING"

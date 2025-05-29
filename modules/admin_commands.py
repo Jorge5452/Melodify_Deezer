@@ -9,7 +9,7 @@ import logging
 import time
 import asyncio
 from datetime import datetime
-from typing import Dict, Any, Optional, List, Tuple
+
 
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, ConversationHandler
@@ -36,6 +36,7 @@ async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 */broadcast* - Enviar mensaje a todos los usuarios
 */system* - Ver estado del sistema y recursos
 */maintenance* - Activar/desactivar modo mantenimiento
+*/session_stats* - Ver estadísticas detalladas del sistema de gestión de sesiones
 
 Recuerda usar estos comandos con responsabilidad.
 """
@@ -335,8 +336,7 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         # Añadir estadísticas de BD si están disponibles
         if db_stats:
-            # Calcular sesiones creadas hoy
-            today = int(time.time() - 86400)  # Últimas 24h
+            # Obtener sesiones creadas en las últimas 24h
             sessions_today = db_stats.get("active_last_day", 0)
             
             stats_text += f"""
@@ -489,7 +489,6 @@ async def handle_admin_callback(update: Update, context: ContextTypes.DEFAULT_TY
                 filename = f"melodify_export_{timestamp}.json"
                 
                 # Ejecutar exportación de forma asíncrona
-                loop = asyncio.get_event_loop()
                 success = await migrate_sqlite_to_json(filename)
             except ImportError:
                 await query.edit_message_text(
@@ -589,7 +588,7 @@ async def cmd_system(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     try:
         import psutil
         import platform
-        from datetime import datetime, timedelta
+        from datetime import datetime
         
         # Información del sistema
         system_info = {
@@ -723,4 +722,77 @@ async def broadcast_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     )
     
     # Limpiar contexto
-    context.user_data.pop("broadcast_message", None) 
+    context.user_data.pop("broadcast_message", None)
+
+@requires_role("admin")
+async def cmd_session_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Muestra estadísticas detalladas del sistema de gestión de sesiones.
+    
+    Comando: /session_stats
+    """
+    from user_session import UserSession
+    
+    # Obtener métricas
+    metrics = UserSession._metrics
+    
+    # Calcular ratios
+    cache_hit_ratio = metrics.get_cache_hit_ratio()
+    compression_ratio = metrics.get_compression_ratio()
+    
+    # Preparar el mensaje de estadísticas
+    stats_text = f"""
+📊 *Estadísticas del Sistema de Sesiones* 📊
+
+💾 *Caché*:
+• Sesiones en memoria: {len(UserSession._sessions)}/{UserSession._sessions.maxsize}
+• Hits: {metrics.cache_hits}
+• Misses: {metrics.cache_misses}
+• Ratio de aciertos: {cache_hit_ratio:.2%}
+
+🗄️ *Base de Datos*:
+• Lecturas: {metrics.db_reads}
+• Escrituras: {metrics.db_writes}
+• Errores: {metrics.db_errors}
+"""
+
+    # Añadir información de compresión si se ha usado
+    if metrics.compression_count > 0:
+        stats_text += f"""
+🔄 *Compresión*:
+• Datos comprimidos: {metrics.compression_count}
+• Ratio promedio: {compression_ratio:.2f}x
+• Ahorro: {(1 - 1/compression_ratio)*100:.1f}%
+"""
+    
+    # Añadir información de la BD si está disponible
+    if UserSession._use_database:
+        try:
+            import db_manager
+            
+            # Obtener estadísticas de la base de datos
+            db_stats = db_manager.get_session_stats()
+            
+            stats_text += f"""
+📁 *Almacenamiento*:
+• Total sesiones: {db_stats.get('total_sessions', 0)}
+• Por rol:
+  - Admin: {db_stats.get('admin_sessions', 0)}
+  - Premium: {db_stats.get('premium_sessions', 0)}
+  - Normal: {db_stats.get('normal_sessions', 0)}
+• Activas hoy: {db_stats.get('active_last_day', 0)}
+"""
+        except ImportError:
+            pass
+            
+    # Añadir información sobre expiración
+    from config import SESSION_TIERS
+    stats_text += f"""
+⏱️ *Expiración por Niveles*:
+• Admin: {SESSION_TIERS['admin'] // 3600} horas
+• Premium: {SESSION_TIERS['premium'] // 3600} horas
+• Normal: {SESSION_TIERS['normal'] // 60} minutos
+"""
+    
+    # Enviar el mensaje con formato Markdown
+    await update.message.reply_text(stats_text, parse_mode="Markdown") 

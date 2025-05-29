@@ -11,8 +11,14 @@ import time
 import logging
 import asyncio
 import os
+import zlib
 from typing import Dict, Any, Optional, List, Tuple
 from contextlib import contextmanager
+from config import (
+    COMPRESSION_THRESHOLD,
+    SESSION_TIMEOUT,
+    SESSION_TIERS
+)
 
 # Configuración de la base de datos
 DB_DIR = "./data"
@@ -24,6 +30,44 @@ DEFAULT_ROLE = "normal"
 
 # Asegurar que el directorio existe
 os.makedirs(DB_DIR, exist_ok=True)
+
+def compress_data(data_dict: Dict[str, Any]) -> Tuple[bytes, bool]:
+    """
+    Comprime un diccionario si supera el umbral configurado.
+    
+    Args:
+        data_dict: Diccionario a comprimir
+        
+    Returns:
+        Tupla (datos_comprimidos, es_comprimido)
+    """
+    json_str = json.dumps(data_dict)
+    
+    # Comprimir solo si supera el umbral
+    if len(json_str) > COMPRESSION_THRESHOLD:
+        compressed = zlib.compress(json_str.encode())
+        return compressed, True
+    
+    # Devolver sin comprimir
+    return json_str.encode(), False
+
+def decompress_data(data: bytes, is_compressed: bool) -> Dict[str, Any]:
+    """
+    Descomprime datos si es necesario y los convierte a diccionario.
+    
+    Args:
+        data: Datos a descomprimir
+        is_compressed: Indicador de si están comprimidos
+        
+    Returns:
+        Diccionario con los datos descomprimidos
+    """
+    if is_compressed:
+        json_str = zlib.decompress(data).decode()
+    else:
+        json_str = data.decode()
+        
+    return json.loads(json_str)
 
 @contextmanager
 def get_connection():
@@ -64,10 +108,13 @@ def initialize_database():
                 user_id INTEGER PRIMARY KEY,
                 settings TEXT NOT NULL,
                 last_activity REAL NOT NULL,
-                context_data TEXT,
+                context_data BLOB,
+                context_data_compressed INTEGER DEFAULT 0,
                 total_downloads INTEGER DEFAULT 0,
                 active_downloads INTEGER DEFAULT 0,
                 role TEXT DEFAULT 'normal',
+                monthly_downloads INTEGER DEFAULT 0,
+                current_month INTEGER DEFAULT 0,
                 created_at REAL NOT NULL,
                 updated_at REAL NOT NULL
             )
@@ -78,14 +125,31 @@ def initialize_database():
             CREATE INDEX IF NOT EXISTS idx_last_activity ON users(last_activity)
             ''')
             
-            # Verificar si la columna 'role' ya existe en la tabla
+            # Índice para búsquedas por rol
+            cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_role ON users(role)
+            ''')
+            
+            # Verificar si las columnas necesarias existen en la tabla
             cursor.execute("PRAGMA table_info(users)")
             columns = {col[1] for col in cursor.fetchall()}
             
-            # Agregar columna 'role' si no existe
+            # Agregar columnas si no existen
             if 'role' not in columns:
                 logging.info("Añadiendo columna 'role' a la tabla users")
                 cursor.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'normal'")
+                
+            if 'context_data_compressed' not in columns:
+                logging.info("Añadiendo columna 'context_data_compressed' para soporte de compresión")
+                cursor.execute("ALTER TABLE users ADD COLUMN context_data_compressed INTEGER DEFAULT 0")
+                
+            if 'monthly_downloads' not in columns:
+                logging.info("Añadiendo columna 'monthly_downloads' a la tabla users")
+                cursor.execute("ALTER TABLE users ADD COLUMN monthly_downloads INTEGER DEFAULT 0")
+                
+            if 'current_month' not in columns:
+                logging.info("Añadiendo columna 'current_month' a la tabla users")
+                cursor.execute("ALTER TABLE users ADD COLUMN current_month INTEGER DEFAULT 0")
                 
             conn.commit()
             logging.info("Base de datos inicializada correctamente")
@@ -95,7 +159,9 @@ def initialize_database():
             columns = {col[1] for col in cursor.fetchall()}
             expected_columns = {
                 "user_id", "settings", "last_activity", "context_data", 
-                "total_downloads", "active_downloads", "role", "created_at", "updated_at"
+                "context_data_compressed", "total_downloads", "active_downloads", 
+                "role", "monthly_downloads", "current_month", 
+                "created_at", "updated_at"
             }
             
             if not expected_columns.issubset(columns):
@@ -110,6 +176,7 @@ def initialize_database():
 def save_user_session(user_id: int, session_data: Dict[str, Any]) -> bool:
     """
     Guarda una sesión de usuario en la base de datos.
+    Si el contexto es grande, lo comprime automáticamente.
     
     Args:
         user_id: ID del usuario
@@ -125,7 +192,10 @@ def save_user_session(user_id: int, session_data: Dict[str, Any]) -> bool:
             
             # Convertir diccionarios a JSON para almacenamiento
             settings_json = json.dumps(session_data.get("settings", {}))
-            context_data_json = json.dumps(session_data.get("context_data", {}))
+            
+            # Aplicar compresión al context_data si es necesario
+            context_data = session_data.get("context_data", {})
+            context_bytes, is_compressed = compress_data(context_data)
             
             # Asegurar que el role sea válido
             role = session_data.get("role", DEFAULT_ROLE)
@@ -135,17 +205,21 @@ def save_user_session(user_id: int, session_data: Dict[str, Any]) -> bool:
             # Insertar o actualizar registro (UPSERT)
             cursor.execute('''
             INSERT OR REPLACE INTO users 
-            (user_id, settings, last_activity, context_data, total_downloads, 
-             active_downloads, role, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (user_id, settings, last_activity, context_data, context_data_compressed,
+            total_downloads, active_downloads, role, monthly_downloads, current_month,
+            created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 user_id,
                 settings_json,
                 session_data.get("last_activity", now),
-                context_data_json,
+                sqlite3.Binary(context_bytes),  # Datos posiblemente comprimidos
+                1 if is_compressed else 0,      # Indicador de compresión
                 session_data.get("total_downloads", 0),
                 session_data.get("active_downloads", 0),
                 role,
+                session_data.get("monthly_downloads", 0),
+                session_data.get("current_month", 0),
                 session_data.get("created_at", now),
                 now  # updated_at siempre es el tiempo actual
             ))
@@ -165,6 +239,7 @@ def save_user_session(user_id: int, session_data: Dict[str, Any]) -> bool:
 def load_user_session(user_id: int) -> Optional[Dict[str, Any]]:
     """
     Carga una sesión de usuario desde la base de datos.
+    Descomprime los datos si es necesario.
     
     Args:
         user_id: ID del usuario
@@ -184,15 +259,28 @@ def load_user_session(user_id: int) -> Optional[Dict[str, Any]]:
             if not row:
                 return None
                 
+            # Determinar si los datos están comprimidos
+            is_compressed = bool(row["context_data_compressed"]) if "context_data_compressed" in row.keys() else False
+            
+            # Descomprimir si es necesario
+            context_data = {}
+            if row["context_data"]:
+                try:
+                    context_data = decompress_data(row["context_data"], is_compressed)
+                except Exception as e:
+                    logging.error(f"Error descomprimiendo datos para usuario {user_id}: {e}", exc_info=True)
+            
             # Convertir de nuevo a diccionario con deserialización JSON
             return {
                 "user_id": row["user_id"],
                 "settings": json.loads(row["settings"]),
                 "last_activity": row["last_activity"],
-                "context_data": json.loads(row["context_data"]) if row["context_data"] else {},
+                "context_data": context_data,
                 "total_downloads": row["total_downloads"],
                 "active_downloads": row["active_downloads"],
                 "role": row["role"] if "role" in row.keys() else DEFAULT_ROLE,
+                "monthly_downloads": row["monthly_downloads"] if "monthly_downloads" in row.keys() else 0,
+                "current_month": row["current_month"] if "current_month" in row.keys() else 0,
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"]
             }
@@ -513,3 +601,44 @@ def get_users_by_role(role: str) -> List[int]:
     except Exception as e:
         logging.error(f"Error obteniendo usuarios con rol {role}: {e}", exc_info=True)
         return users 
+
+def delete_tiered_sessions(tier_timeouts: Dict[str, int]) -> int:
+    """
+    Elimina sesiones expiradas de la BD respetando diferentes tiempos según rol.
+    
+    Args:
+        tier_timeouts: Diccionario con tiempos de expiración por rol
+        
+    Returns:
+        Número de sesiones eliminadas
+    """
+    try:
+        with get_connection() as conn:
+            cursor = conn.cursor()
+            now = time.time()
+            deleted = 0
+            
+            # Eliminar sesiones por cada tipo de rol con su tiempo específico
+            for role, timeout in tier_timeouts.items():
+                expire_time = now - timeout
+                cursor.execute('''
+                DELETE FROM users 
+                WHERE role = ? AND last_activity < ?
+                ''', (role, expire_time))
+                deleted += cursor.rowcount
+            
+            # Eliminar cualquier sesión con rol desconocido usando tiempo por defecto
+            expire_time = now - SESSION_TIMEOUT
+            cursor.execute('''
+            DELETE FROM users 
+            WHERE role NOT IN ({}) AND last_activity < ?
+            '''.format(','.join(['?'] * len(tier_timeouts))), 
+            (*tier_timeouts.keys(), expire_time))
+            
+            deleted += cursor.rowcount
+            conn.commit()
+            
+            return deleted
+    except Exception as e:
+        logging.error(f"Error eliminando sesiones expiradas: {e}", exc_info=True)
+        return 0 

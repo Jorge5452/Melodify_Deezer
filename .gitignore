@@ -1,3 +1,7 @@
+#Reglas de IDE
+.cursor/
+
+
 # Ignorar archivos de caché de Python
 __pycache__/
 *.pyc
@@ -13,3 +17,7 @@ linux/
 # Archivos sensibles
 *.env
 config.py
+
+# Ignorar archivos de configuración de data
+data/
+roles_setup.log

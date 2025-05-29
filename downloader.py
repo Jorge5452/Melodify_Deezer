@@ -258,6 +258,7 @@ async def enqueue_download(user_id: int, process_func: Callable[..., Awaitable[A
         user_id: ID del usuario de Telegram
         process_func: Función a ejecutar (process_track o process_collection)
         *args, **kwargs: Argumentos para la función de procesamiento
+            progress_message: Mensaje de progreso preexistente (opcional)
         
     Returns:
         bool: True si se encoló correctamente, False en caso de error
@@ -270,8 +271,16 @@ async def enqueue_download(user_id: int, process_func: Callable[..., Awaitable[A
         # Verificar si el usuario tiene demasiadas descargas activas
         if session.active_downloads >= MAX_CONCURRENT_DOWNLOADS_PER_USER:
             logging.warning(f"Usuario {user_id} ha alcanzado el límite de descargas concurrentes")
-            return False
             
+            # Si hay un mensaje de progreso existente, actualizarlo
+            if 'progress_message' in kwargs and kwargs['progress_message']:
+                from modules.message_manager import message_manager
+                await kwargs['progress_message'].complete(
+                    success=False,
+                    error_message=f"Has alcanzado el límite de {MAX_CONCURRENT_DOWNLOADS_PER_USER} descargas simultáneas. Espera a que terminen las actuales."
+                )
+            return False
+        
         # Verificar límite mensual para usuarios normales
         if session.role == "normal":
             # Verificar si cambió el mes y reiniciar contador si es necesario
@@ -284,16 +293,41 @@ async def enqueue_download(user_id: int, process_func: Callable[..., Awaitable[A
             # Rechazar la descarga si se alcanzó el límite mensual
             if remaining <= 0:
                 logging.warning(f"Usuario {user_id} ha alcanzado el límite mensual de descargas ({monthly_stats['limit']})")
-                # Hacer que el update.message pueda manejar este error específico
-                if 'update' in kwargs and hasattr(kwargs['update'], 'message'):
+                
+                # Si hay un mensaje de progreso existente, actualizarlo
+                if 'progress_message' in kwargs and kwargs['progress_message']:
+                    await kwargs['progress_message'].complete(
+                        success=False,
+                        error_message=f"⛔ Has alcanzado el límite de {monthly_stats['limit']} descargas mensuales.\n"
+                        f"Considera donar para mantener el servicio y obtener beneficios adicionales."
+                    )
+                # De lo contrario, usar el método de mensaje antiguo
+                elif 'update' in kwargs and hasattr(kwargs['update'], 'message'):
                     await kwargs['update'].message.reply_text(
                         f"⛔ Has alcanzado el límite de {monthly_stats['limit']} descargas mensuales.\n"
                         f"Considera donar para mantener el servicio y obtener beneficios adicionales."
                     )
                 return False
         
+        # Increment active_downloads here - for collections, this will count as only ONE download
+        # regardless of how many tracks are in the collection
+        session.active_downloads += 1
+        session.mark_as_changed()
+        
         # Obtener el gestor de colas
         queue_manager = QueueManager.get_instance()
+        
+        # Si hay un mensaje de progreso, actualizarlo para indicar que está en cola
+        if 'progress_message' in kwargs and kwargs['progress_message']:
+            content_type = kwargs.get('content_type', 'colección')
+            await kwargs['progress_message'].update(
+                "waiting", 
+                content_type=content_type,
+                queue_info="Tu solicitud está en cola y se procesará a la brevedad."
+            )
+            
+            # Asegurarse de que el mensaje de progreso esté disponible para la tarea
+            # ya que se procesará en un contexto distinto
         
         # Añadir la tarea a la cola del usuario a través del gestor de colas
         task = await queue_manager.enqueue_user_task(
@@ -307,11 +341,37 @@ async def enqueue_download(user_id: int, process_func: Callable[..., Awaitable[A
             logging.info(f"Tarea encolada para usuario {user_id}, descargas activas: {session.active_downloads}")
             return True
         else:
+            # If task couldn't be queued, decrement the counter we just incremented
+            session.active_downloads = max(0, session.active_downloads - 1)
+            session.mark_as_changed()
+            
             logging.error(f"No se pudo encolar la tarea para usuario {user_id}")
+            # Si hay un mensaje de progreso, actualizarlo para indicar el error
+            if 'progress_message' in kwargs and kwargs['progress_message']:
+                await kwargs['progress_message'].complete(
+                    success=False,
+                    error_message="Error al añadir la solicitud a la cola. Inténtalo de nuevo."
+                )
             return False
         
     except Exception as e:
+        # If there was any exception, make sure we decrement the counter if we incremented it
+        try:
+            session.active_downloads = max(0, session.active_downloads - 1)
+            session.mark_as_changed()
+        except Exception:
+            pass
+            
         logging.error(f"Error añadiendo descarga a la cola para usuario {user_id}: {str(e)}", exc_info=True)
+        # Si hay un mensaje de progreso, actualizarlo para indicar el error
+        try:
+            if 'progress_message' in kwargs and kwargs['progress_message']:
+                await kwargs['progress_message'].complete(
+                    success=False,
+                    error_message="Error al procesar la solicitud. Inténtalo de nuevo."
+                )
+        except Exception:
+            pass  # Ignorar errores al actualizar el mensaje de error
         return False
 
 async def get_user_stats(user_id: int) -> Dict[str, Any]:
