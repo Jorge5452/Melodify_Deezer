@@ -42,7 +42,7 @@ from src.config import (
 from src.infrastructure.logging import initialize_logging, silence_http_logs, silence_telegram_logs
 from src.infrastructure.database import db_service
 from src.infrastructure.deezer import LogListener
-from src.core.services import UserSession, cleanup_sessions, requires_role
+from src.core.services import UserSession, cleanup_sessions
 from src.core.services.queue_service import QueueManager
 
 # Interface handlers (newly migrated)
@@ -216,7 +216,6 @@ async def main() -> Application:
         try:
             db_service.initialize_database()
             db_initialized = True
-            logging.info("Database initialized successfully")
         except Exception as e:
             logging.warning(f"Database initialization failed: {e}. Running without persistence")
         
@@ -298,12 +297,12 @@ async def main() -> Application:
         app.add_handler(CallbackQueryHandler(handle_premium_callback, pattern="^premium_"))
         
         # Register admin command handlers
-        app.add_handler(CommandHandler("admin", requires_role("admin")(admin_help)))
+        app.add_handler(CommandHandler("admin", admin_help))
         app.add_handler(CommandHandler("stats_admin", admin_stats))
         app.add_handler(CommandHandler("maintenance", cmd_maintenance))
         app.add_handler(CommandHandler("userinfo", cmd_user_info))
-        app.add_handler(CommandHandler("system", requires_role("admin")(cmd_system)))
-        app.add_handler(CommandHandler("session_stats", requires_role("admin")(cmd_session_stats)))
+        app.add_handler(CommandHandler("system", cmd_system))
+        app.add_handler(CommandHandler("session_stats", cmd_session_stats))
         app.add_handler(CallbackQueryHandler(handle_admin_callback, pattern="^admin_"))
         
         # Broadcast command handler

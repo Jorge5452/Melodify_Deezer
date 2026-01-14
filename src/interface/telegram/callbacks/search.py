@@ -19,7 +19,6 @@ from src.interface.telegram.utils.decorators import (
 )
 
 
-@with_error_handling
 async def process_search_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Processes search button callbacks.

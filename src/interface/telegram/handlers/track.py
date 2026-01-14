@@ -159,7 +159,7 @@ async def process_track(
         
         # Send to Telegram
         logging.info(f"[TRACK] Download successful, sending to Telegram track {track_id}, user: {user_id}")
-        await progress_msg.update("uploading", content_type="canción")
+
         
         # Send and save to vault
         before_send = time.time()
@@ -179,6 +179,12 @@ async def process_track(
         # Save to vault
         logging.info(f"[TRACK] Saving to vault track {track_id}, user: {user_id}")
         add_to_vault(cache_key, file_id)
+        
+        # Update user statistics
+        try:
+            session.increment_downloads()
+        except Exception as stats_error:
+            logging.error(f"[TRACK] Error updating stats for user {user_id}: {stats_error}")
         
         # Delete temporary file
         if os.path.exists(file_path):

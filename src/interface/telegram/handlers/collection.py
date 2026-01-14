@@ -291,6 +291,13 @@ async def process_playlist_in_batches(update, context, track_urls, track_ids, tr
                 file_ids_batch.append(file_id)
                 file_ids_all.append(file_id)
                 add_to_vault(individual_cache_key, file_id)
+                
+                # Update user statistics
+                try:
+                    session.increment_downloads()
+                except Exception as stats_error:
+                    logging.error(f"[COLLECTION] Error updating stats for track {i+1}: {stats_error}")
+                    
                 successful_tracks += 1
                 
                 if os.path.exists(file_path):
@@ -399,6 +406,13 @@ async def process_small_collection(update, context, track_urls, track_ids, track
             file_ids_batch.append(file_id)
             file_ids_all.append(file_id)
             add_to_vault(individual_cache_key, file_id)
+            
+            # Update user statistics
+            try:
+                session.increment_downloads()
+            except Exception as stats_error:
+                logging.error(f"[COLLECTION] Error updating stats for track {i+1}: {stats_error}")
+                
             successful_tracks += 1
             
             if os.path.exists(file_path):

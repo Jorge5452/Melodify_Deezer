@@ -86,7 +86,6 @@ async def download_track(
         try:
             # Increment active downloads counter
             session.active_downloads += 1
-            session.total_downloads += 1
             logging.info(f"[DOWNLOADER] User {user_id} now has {session.active_downloads} active downloads")
             
             # Execute download in background using queues

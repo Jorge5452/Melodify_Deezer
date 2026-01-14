@@ -208,6 +208,7 @@ def save_user_session(user_id: int, session_data: Dict[str, Any]) -> bool:
             
             # Ensure role is valid
             role = session_data.get("role", DEFAULT_ROLE)
+            print(role)
             if role not in VALID_ROLES:
                 role = DEFAULT_ROLE
             

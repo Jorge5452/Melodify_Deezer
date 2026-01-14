@@ -22,6 +22,7 @@ WAITING_FOR_USER_ID = 1
 WAITING_FOR_ROLE = 2
 
 
+@requires_role("admin")
 async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Shows help about available administrative commands.
