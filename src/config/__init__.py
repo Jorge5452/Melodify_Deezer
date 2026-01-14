@@ -1,0 +1,45 @@
+# -*- coding: utf-8 -*-
+"""
+Configuration module for the Melodify application.
+
+Exposes settings and constants to the rest of the application.
+"""
+
+from .settings import (
+    TELEGRAM_TOKEN,
+    DEEZER_ARL,
+    VAULT_CHATID,
+    DOWNLOAD_PATH,
+    LOG_LEVEL,
+    LOG_FORMAT,
+    SESSION_TIMEOUT,
+    SESSION_CLEANUP_INTERVAL,
+    SESSION_CACHE_SIZE,
+    SESSION_TIERS,
+    COMPRESSION_THRESHOLD,
+    DB_BATCH_SIZE,
+    DB_FLUSH_INTERVAL,
+    MONTHLY_DOWNLOAD_LIMIT,
+    ROLES_HIERARCHY,
+    RATE_LIMIT_MAX_REQUESTS,
+    RATE_LIMIT_TIME_WINDOW,
+    MAX_CONCURRENT_DOWNLOADS_PER_USER,
+    MAX_CONCURRENT_DOWNLOADS_GLOBAL,
+    HTTP_CONNECT_TIMEOUT,
+    HTTP_READ_TIMEOUT,
+    HTTP_WRITE_TIMEOUT,
+    MAX_RETRIES,
+    INITIAL_RETRY_DELAY,
+    RETRY_BACKOFF_FACTOR,
+)
+
+from .constants import (
+    TrackFormats,
+    DEEZER_TRACK_REGEX,
+    DEEZER_ALBUM_REGEX,
+    DEEZER_PLAYLIST_REGEX,
+    BATCH_SIZE,
+    VAULT_JSON,
+    VAULT_BACKUP,
+    MAX_VAULT_ENTRIES,
+)
