@@ -85,16 +85,16 @@ async def process_track(
     
     # Si no se proporcionó un mensaje de progreso existente, crear uno nuevo
     if not progress_msg:
-    # Notificar inicio de descarga con un mensaje de progreso
-    logging.info(f"[TRACK] Canción {track_id} no encontrada en caché, descargando para usuario: {user_id}") 
-    
-    # Crear mensaje de progreso para la descarga
-    progress_msg = await message_manager.send_progress(
-            update,
-            process_type="download",
-            initial_status="starting",
-            content_type="canción"
-        )
+        # Notificar inicio de descarga con un mensaje de progreso
+        logging.info(f"[TRACK] Canción {track_id} no encontrada en caché, descargando para usuario: {user_id}") 
+        
+        # Crear mensaje de progreso para la descarga
+        progress_msg = await message_manager.send_progress(
+                update,
+                process_type="download",
+                initial_status="starting",
+                content_type="canción"
+            )
     
     try:
         # Verificar si la pista existe antes de intentar descargarla

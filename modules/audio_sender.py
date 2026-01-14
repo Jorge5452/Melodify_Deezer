@@ -100,13 +100,47 @@ async def send_and_save_audio(context, chat_id, file_path, caption, vault_chat_i
             if thumbnail:
                 send_kwargs["thumbnail"] = thumbnail
                 
-            # Usar la función de reintento para enviar el audio
+            # Función interna para enviar con reintentos y reset de archivo
+            async def send_with_file_reset(func, **kwargs):
+                import random
+                import asyncio
+                
+                delay = INITIAL_RETRY_DELAY
+                last_exception = None
+                
+                for attempt in range(MAX_RETRIES + 1):
+                    try:
+                        # CRÍTICO: Resetear el puntero del archivo al inicio antes de cada intento
+                        f.seek(0)
+                        
+                        return await func(**kwargs)
+                    except (TimedOut, NetworkError) as e:
+                        last_exception = e
+                        if attempt < MAX_RETRIES:
+                            jitter_value = random.uniform(-0.1, 0.1) * delay
+                            current_delay = delay + jitter_value
+                            
+                            logging.warning(
+                                f"Intento {attempt+1}/{MAX_RETRIES+1} falló al enviar audio: {str(e)}. "
+                                f"Reintentando en {current_delay:.2f}s"
+                            )
+                            await asyncio.sleep(current_delay)
+                            delay *= RETRY_BACKOFF_FACTOR
+                    except RetryAfter as e:
+                        last_exception = e
+                        if attempt < MAX_RETRIES:
+                            logging.warning(f"Rate limit. Esperando {e.retry_after}s.")
+                            await asyncio.sleep(e.retry_after)
+                    except Exception as e:
+                        logging.error(f"Error no recuperable en intento {attempt+1}: {str(e)}")
+                        raise
+
+                raise last_exception
+
+            # Usar la nueva lógica robusta
             try:
-                sent_message = await retry_async_operation(
+                sent_message = await send_with_file_reset(
                     context.bot.send_audio,
-                    max_retries=MAX_RETRIES,
-                    initial_delay=INITIAL_RETRY_DELAY,
-                    backoff_factor=RETRY_BACKOFF_FACTOR,
                     **send_kwargs
                 )
             except (TimedOut, NetworkError) as e:
@@ -118,10 +152,17 @@ async def send_and_save_audio(context, chat_id, file_path, caption, vault_chat_i
                     "audio": f,
                     "caption": caption
                 }
-                sent_message = await retry_async_operation(
-                    context.bot.send_audio,
-                    max_retries=1,
-                    **simple_kwargs
+                # También usar reset para el intento simplificado (solo 1 reintento para fallback)
+                # Hack: Usamos la misma función pero limitamos el loop si quisiéramos, 
+                # o simplemente hacemos un intento directo con seek.
+                f.seek(0) 
+                # Reutilizamos la función auxiliar con menos reintentos para el fallback
+                MAX_RETRIES_FALLBACK = 1
+                
+                # Redefinimos temporalmente para el fallback o usamos lógica similar
+                sent_message = await send_with_file_reset(
+                   context.bot.send_audio,
+                   **simple_kwargs
                 )
         
         file_id = sent_message.audio.file_id

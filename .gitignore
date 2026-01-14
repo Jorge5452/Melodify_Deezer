@@ -1,6 +1,9 @@
 #Reglas de IDE
 .cursor/
 
+#Skills agents
+.agent/
+
 
 # Ignorar archivos de caché de Python
 __pycache__/

@@ -11,6 +11,7 @@ import asyncio
 import logging
 import time
 import signal
+import argparse
 from typing import Dict, Any, Optional, Tuple
 
 # Componentes de Telegram
@@ -61,21 +62,40 @@ from modules.premium_commands import (
     handle_premium_callback
 )
 
-# Inicializar el sistema de logging usando el nuevo módulo centralizado
-initialize_logging(
-    log_level=LOG_LEVEL,
-    log_file="melodify.log",
-    enable_console=True,
-    preset="production"
-)
-
-# Silenciar loggers específicos que producen mucho ruido
-silence_http_logs()  # Silenciar logs de HTTP y conexiones
-silence_telegram_logs()  # Silenciar logs de Telegram API
-
-# Configurar niveles específicos adicionales
-logging.getLogger("deemix").setLevel(logging.INFO)
-logging.getLogger('modules.message_manager').setLevel(logging.DEBUG)
+# Función para configurar logging basada en argumentos
+def setup_logging(debug_mode: bool = False):
+    """
+    Configura el sistema de logging basándose en el modo de ejecución.
+    
+    Args:
+        debug_mode (bool): Si es True, activa el modo debug/desarrollo.
+                           Si es False, usa el modo producción.
+    """
+    preset = "development" if debug_mode else "production"
+    
+    # Inicializar el sistema de logging usando el nuevo módulo centralizado
+    initialize_logging(
+        log_level=LOG_LEVEL,
+        log_file="melodify.log",
+        enable_console=True,
+        preset=preset
+    )
+    
+    # Configuración específica según el modo
+    if not debug_mode:
+        # En producción, silenciar loggers ruidosos
+        silence_http_logs()  # Silenciar logs de HTTP y conexiones
+        silence_telegram_logs()  # Silenciar logs de Telegram API
+        print("✅ Modo PRODUCCIÓN activo: Logs ruidosos silenciados")
+    else:
+        print("🐞 Modo DEBUG activo: Todos los logs habilitados")
+    
+    # Configurar niveles específicos adicionales comunes a ambos modos
+    logging.getLogger("deemix").setLevel(logging.INFO)
+    
+    # En debug, message_manager puede ser más verboso
+    msg_mgr_level = logging.DEBUG if debug_mode else logging.INFO
+    logging.getLogger('modules.message_manager').setLevel(msg_mgr_level)
 
 async def error_handler(update: Optional[Any], context: Any) -> None:
     """
@@ -350,7 +370,24 @@ async def main() -> Application:
         except Exception as save_error:
             logging.error(f"Error guardando sesiones: {save_error}")
 
+
+def parse_arguments():
+    """Parsea los argumentos de línea de comandos."""
+    parser = argparse.ArgumentParser(description="Melodify Deluxe Bot")
+    parser.add_argument(
+        "--debug", 
+        action="store_true", 
+        help="Activa el modo debug con logs detallados"
+    )
+    return parser.parse_args()
+
 if __name__ == "__main__":
+    # Parsear argumentos antes de iniciar
+    args = parse_arguments()
+    
+    # Configurar logging según los argumentos
+    setup_logging(args.debug)
+
     # Configurar manejo de señales para cierre controlado
     try:
         import platform
